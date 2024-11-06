@@ -1,0 +1,2 @@
+- correlation between wealth and alpha
+- other features to use by agents

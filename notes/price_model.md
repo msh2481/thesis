@@ -53,9 +53,28 @@ Orders are placed at prices $\exp(\text{estimate}(t-D,\alpha,k,\sigma) \pm \delt
   6. Move to next period
 - Each period represents one price point in the resulting time series
 
+#### 5.3 Agentic Process
+- Maintains a fixed pool of $N$ agents throughout the simulation
+- Each agent:
+  - Has persistent state (balance, position, wealth)
+  - Tracks their performance relative to initial wealth
+  - Gets replaced if wealth drops below 10% of initial
+- In each period:
+  1. Sample $K \sim \text{Poisson}(\lambda)$ active agents from the pool
+  2. Each active agent:
+     - Updates their wealth estimate based on current price
+     - If wealth < 10% of initial: replaced with new agent
+     - Otherwise: generates and submits orders
+  3. Process trades and update agent states
+- Features:
+  - Natural selection of successful strategies
+  - Wealth redistribution between agents
+  - Position and risk management effects
+  - More realistic market dynamics through agent persistence
+
 ### 6. Parameter Priors
 - $\alpha \sim \text{Beta}(\alpha_0, \alpha_1)$
-- $k \sim \text{Gamma}(k_\alpha, k_\theta)$
+- $k - 1 \sim \text{Gamma}(k_\alpha, k_\theta)$
 - $\sigma \sim \text{Gamma}(\sigma_\alpha, \sigma_\theta)$
 - $W \sim \text{Pareto}(w_m, w_\alpha)$
 - $D \sim \text{LogNormal}(\mu_D, \sigma_D)$

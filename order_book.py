@@ -1,8 +1,9 @@
 import heapq
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from beartype import beartype as typed
+from beartype.typing import Self
 
 
 @dataclass
@@ -12,6 +13,7 @@ class Order:
     size: float
     timestamp: float
     agent_id: int
+    agent: Any  # Reference to the agent placing the order
 
 
 @dataclass
@@ -21,15 +23,58 @@ class Trade:
     timestamp: float
     maker_id: int
     taker_id: int
+    taker_is_buy: bool
+
+
+@typed
+@dataclass
+class Candle:
+    timestamp: float
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    num_trades: int
+
+    @classmethod
+    def from_trades(cls, trades: list[Trade], start_time: float) -> Self | None:
+        """
+        Construct a candle from a list of trades that occurred in the period.
+
+        Args:
+            trades: List of trades in chronological order
+            start_time: Starting timestamp of the period
+
+        Returns:
+            Candle object or None if no trades occurred
+        """
+        if not trades:
+            return None
+
+        prices = [trade.price for trade in trades]
+        volumes = [trade.size for trade in trades]
+
+        return cls(
+            timestamp=start_time,
+            open=prices[0],
+            high=max(prices),
+            low=min(prices),
+            close=prices[-1],
+            volume=sum(volumes),
+            num_trades=len(trades),
+        )
 
 
 class OrderBook:
     @typed
     def __init__(self):
         """Initialize empty order book with two sides (bids and asks)"""
-        # For bids we use negative price for correct ordering in heap
-        self.bids: list[tuple[float, float, Order]] = []  # (-price, timestamp, Order)
-        self.asks: list[tuple[float, float, Order]] = []  # (price, timestamp, Order)
+        # For bids (+1) we use positive price, for asks (-1) negative price
+        self.heaps: dict[int, list[tuple[float, float, Order]]] = {
+            +1: [],  # Bids: (-price, timestamp, Order)
+            -1: [],  # Asks: (price, timestamp, Order)
+        }
 
     @typed
     def add_order(self, order: Order) -> list[Trade] | None:
@@ -37,25 +82,23 @@ class OrderBook:
         Add new order to the book. If it matches with existing orders,
         execute trades and return them. Otherwise, add to book and return None.
         """
-        if order.side == "buy":
-            return self._handle_buy(order)
-        else:
-            return self._handle_sell(order)
+        direction = +1 if order.side == "buy" else -1
+        return self._handle_order(order, direction)
 
     @typed
     def get_best_bid(self) -> float | None:
         """Get highest bid price"""
-        if not self.bids:
+        if not self.heaps[+1]:
             return None
-        neg_price, _, _ = self.bids[0]
+        neg_price, _, _ = self.heaps[+1][0]
         return -neg_price
 
     @typed
     def get_best_ask(self) -> float | None:
         """Get lowest ask price"""
-        if not self.asks:
+        if not self.heaps[-1]:
             return None
-        price, _, _ = self.asks[0]
+        price, _, _ = self.heaps[-1][0]
         return price
 
     @typed
@@ -68,76 +111,73 @@ class OrderBook:
         return (best_bid + best_ask) / 2
 
     @typed
-    def _handle_buy(self, order: Order) -> list[Trade] | None:
-        trades = []
-        remaining_size = order.size
-
-        while remaining_size > 0 and self.asks:
-            ask_price, _, ask_order = self.asks[0]
-
-            if ask_price > order.price:  # No match possible
-                break
-
-            heapq.heappop(self.asks)  # Remove the ask we're about to match
-
-            trade_size = min(remaining_size, ask_order.size)
-            trades.append(
-                Trade(
-                    price=ask_price,
-                    size=trade_size,
-                    timestamp=order.timestamp,
-                    maker_id=ask_order.agent_id,
-                    taker_id=order.agent_id,
-                )
-            )
-
-            remaining_size -= trade_size
-            if trade_size < ask_order.size:  # Put back remaining size
-                ask_order.size -= trade_size
-                heapq.heappush(self.asks, (ask_price, ask_order.timestamp, ask_order))
-
-        if remaining_size > 0:  # Add remaining order to book
-            order.size = remaining_size
-            heapq.heappush(self.bids, (-order.price, order.timestamp, order))
+    def execute(
+        self, taker_order: Order, maker_order: Order, taker_direction: int
+    ) -> Trade | None:
+        """Execute a trade between two orders"""
+        taker_price = taker_order.price
+        maker_price = maker_order.price
+        if taker_direction * (taker_price - maker_price) < 0:
             return None
 
-        return trades
+        price = maker_price
+
+        # Execute trade
+        buy_order = taker_order if taker_direction == +1 else maker_order
+        sell_order = maker_order if taker_direction == +1 else taker_order
+
+        trade_size = min(taker_order.size, maker_order.size)
+        trade_size = min(trade_size, buy_order.agent.balance / price)
+        trade_size = min(trade_size, sell_order.agent.position)
+
+        if trade_size < 1e-6:
+            return None
+
+        buy_agent = buy_order.agent
+        sell_agent = sell_order.agent
+        buy_agent.balance -= trade_size * price
+        sell_agent.balance += trade_size * price
+        buy_agent.position += trade_size
+        sell_agent.position -= trade_size
+
+        trade = Trade(
+            price=price,
+            size=trade_size,
+            timestamp=max(taker_order.timestamp, maker_order.timestamp),
+            maker_id=maker_order.agent_id,
+            taker_id=taker_order.agent_id,
+            taker_is_buy=(taker_direction == +1),
+        )
+        return trade
 
     @typed
-    def _handle_sell(self, order: Order) -> list[Trade] | None:
+    def _handle_order(self, order: Order, direction: int) -> list[Trade] | None:
         trades = []
-        remaining_size = order.size
+        opposite_heap = self.heaps[-direction]
 
-        while remaining_size > 0 and self.bids:
-            neg_bid_price, _, bid_order = self.bids[0]
-            bid_price = -neg_bid_price
-
-            if bid_price < order.price:  # No match possible
+        while order.size > 0 and opposite_heap:
+            maker_price_signed, _, maker_order = opposite_heap[0]
+            trade = self.execute(order, maker_order, direction)
+            if trade is None:
                 break
 
-            heapq.heappop(self.bids)  # Remove the bid we're about to match
+            heapq.heappop(opposite_heap)
+            trades.append(trade)
 
-            trade_size = min(remaining_size, bid_order.size)
-            trades.append(
-                Trade(
-                    price=bid_price,
-                    size=trade_size,
-                    timestamp=order.timestamp,
-                    maker_id=bid_order.agent_id,
-                    taker_id=order.agent_id,
-                )
-            )
+            order.size -= trade.size
+            maker_order.size -= trade.size
 
-            remaining_size -= trade_size
-            if trade_size < bid_order.size:  # Put back remaining size
-                bid_order.size -= trade_size
+            if maker_order.size > 0:  # Put back remaining size
                 heapq.heappush(
-                    self.bids, (neg_bid_price, bid_order.timestamp, bid_order)
+                    opposite_heap,
+                    (maker_price_signed, maker_order.timestamp, maker_order),
                 )
 
-        if remaining_size > 0:  # Add remaining order to book
-            order.size = remaining_size
-            heapq.heappush(self.asks, (order.price, order.timestamp, order))
-            return None
+        if order.size > 0:  # Add remaining order to book
+            heapq.heappush(
+                self.heaps[direction],
+                (order.price * (-direction), order.timestamp, order),
+            )
+            return trades if trades else None
 
         return trades
