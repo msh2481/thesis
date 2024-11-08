@@ -91,11 +91,19 @@ class AtLeast1(t.nn.Module):
 
 def build_model():
     b = 200
+    b2 = 32
     model = t.nn.Sequential(
         t.nn.Linear(5 * k, b),
         MLPBlock(b),
         MLPBlock(b),
-        t.nn.Linear(b, 1),
+        t.nn.Linear(b, b2),
+        MLPBlock(b2),
+        MLPBlock(b2),
+        MLPBlock(b2),
+        MLPBlock(b2),
+        MLPBlock(b2),
+        MLPBlock(b2),
+        t.nn.Linear(b2, 1),
         AtLeast1(),
     )
     for m in model.modules():
@@ -277,8 +285,8 @@ def predict():
 
 if __name__ == "__main__":
     # generate()
-    # train()
-    predict()
+    train()
+    # predict()
     # data = collect_data(n_series=10)
     # for series in data:
     #     plt.plot(series[:, 3], label="close")
