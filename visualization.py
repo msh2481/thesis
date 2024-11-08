@@ -1,10 +1,9 @@
 import mplfinance as mpf
 import numpy as np
 import pandas as pd
-from agent import Agent
+from agent import Agent, Candle, Trade
 from beartype import beartype as typed
 from matplotlib import pyplot as plt
-from order_book import Candle, Trade
 
 
 @typed

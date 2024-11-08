@@ -26,6 +26,7 @@ where:
 - $\sigma$: noise level in estimates
 
 ### 4. Agent Trading Behavior
+#### Order placement
 Each agent has parameters:
 - Wealth ($W$)
 - Delay ($D$)
@@ -33,28 +34,8 @@ Each agent has parameters:
 - Uncertainty ($\delta$) in log-space
 
 Orders are placed at prices $\exp(\text{estimate}(t-D,\alpha,k,\sigma) \pm \delta)$ with order size $W \cdot A$
-
-### 5. Trading Process Variants
-
-#### 5.1 Persistent Order Book Process
-- Trading actions follow a Poisson process with rate $\lambda$
-- Orders persist between iterations in the order book
-- For each action, a new i.i.d. agent is sampled with their parameters
-- Orders accumulate over time, creating market depth and liquidity dynamics
-
-#### 5.2 Period-based Process
-- Time is divided into regular periods
-- In each period:
-  1. Start with an empty order book
-  2. Sample $N \sim \text{Poisson}(\lambda)$ agents
-  3. Generate and process orders from these agents
-  4. Record any trades that occurred
-  5. Discard the order book
-  6. Move to next period
-- Each period represents one price point in the resulting time series
-
-#### 5.3 Agentic Process
-- Maintains a fixed pool of $N$ agents throughout the simulation
+#### Agent pool dynamics
+- There is a fixed pool of $N$ agents throughout the simulation
 - Each agent:
   - Has persistent state (balance, position, wealth)
   - Tracks their performance relative to initial wealth
@@ -72,7 +53,7 @@ Orders are placed at prices $\exp(\text{estimate}(t-D,\alpha,k,\sigma) \pm \delt
   - Position and risk management effects
   - More realistic market dynamics through agent persistence
 
-### 6. Parameter Priors
+### 5. Parameter Priors
 - $\alpha \sim \text{Beta}(\alpha_0, \alpha_1)$
 - $k - 1 \sim \text{Gamma}(k_\alpha, k_\theta)$
 - $\sigma \sim \text{Gamma}(\sigma_\alpha, \sigma_\theta)$

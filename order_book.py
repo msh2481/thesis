@@ -2,88 +2,44 @@ import heapq
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import numpy as np
+from agent import Agent, Order, Trade
+
 from beartype import beartype as typed
-from beartype.typing import Self
-
-
-@dataclass
-class Order:
-    side: Literal["buy", "sell"]
-    price: float
-    size: float
-    timestamp: float
-    agent_id: int
-    agent: Any  # Reference to the agent placing the order
-
-
-@dataclass
-class Trade:
-    price: float
-    size: float
-    timestamp: float
-    maker_id: int
-    taker_id: int
-    taker_is_buy: bool
-
-
-@typed
-@dataclass
-class Candle:
-    timestamp: float
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    num_trades: int
-
-    @classmethod
-    def from_trades(cls, trades: list[Trade], start_time: float) -> Self | None:
-        """
-        Construct a candle from a list of trades that occurred in the period.
-
-        Args:
-            trades: List of trades in chronological order
-            start_time: Starting timestamp of the period
-
-        Returns:
-            Candle object or None if no trades occurred
-        """
-        if not trades:
-            return None
-
-        prices = [trade.price for trade in trades]
-        volumes = [trade.size for trade in trades]
-
-        return cls(
-            timestamp=start_time,
-            open=prices[0],
-            high=max(prices),
-            low=min(prices),
-            close=prices[-1],
-            volume=sum(volumes),
-            num_trades=len(trades),
-        )
+from loguru import logger
 
 
 class OrderBook:
     @typed
-    def __init__(self):
+    def __init__(self, expiration_time: float | int = 10):
         """Initialize empty order book with two sides (bids and asks)"""
         # For bids (+1) we use positive price, for asks (-1) negative price
         self.heaps: dict[int, list[tuple[float, float, Order]]] = {
             +1: [],  # Bids: (-price, timestamp, Order)
             -1: [],  # Asks: (price, timestamp, Order)
         }
+        self.expiration_time = expiration_time
 
     @typed
-    def add_order(self, order: Order) -> list[Trade] | None:
+    def remove_orders_before(self, timestamp: float) -> None:
+        """Remove all orders with timestamp older than the given timestamp"""
+        for side in self.heaps.values():
+            side[:] = [
+                (price, timestamp, order)
+                for price, timestamp, order in side
+                if order.timestamp >= timestamp
+            ]
+
+    @typed
+    def add_order(self, order: Order) -> list[Trade]:
         """
         Add new order to the book. If it matches with existing orders,
         execute trades and return them. Otherwise, add to book and return None.
         """
         direction = +1 if order.side == "buy" else -1
-        return self._handle_order(order, direction)
+        trades = self._handle_order(order, direction)
+        self.remove_orders_before(order.timestamp - self.expiration_time)
+        return trades
 
     @typed
     def get_best_bid(self) -> float | None:
@@ -125,11 +81,9 @@ class OrderBook:
         # Execute trade
         buy_order = taker_order if taker_direction == +1 else maker_order
         sell_order = maker_order if taker_direction == +1 else taker_order
-
+        buy_order.size = min(buy_order.size, buy_order.agent.balance / price)
+        sell_order.size = min(sell_order.size, sell_order.agent.position)
         trade_size = min(taker_order.size, maker_order.size)
-        trade_size = min(trade_size, buy_order.agent.balance / price)
-        trade_size = min(trade_size, sell_order.agent.position)
-
         if trade_size < 1e-6:
             return None
 
@@ -139,45 +93,114 @@ class OrderBook:
         sell_agent.balance += trade_size * price
         buy_agent.position += trade_size
         sell_agent.position -= trade_size
+        buy_order.size -= trade_size
+        sell_order.size -= trade_size
 
         trade = Trade(
             price=price,
             size=trade_size,
             timestamp=max(taker_order.timestamp, maker_order.timestamp),
-            maker_id=maker_order.agent_id,
-            taker_id=taker_order.agent_id,
+            maker_id=maker_order.agent.id,
+            taker_id=taker_order.agent.id,
             taker_is_buy=(taker_direction == +1),
         )
         return trade
 
     @typed
     def _handle_order(self, order: Order, direction: int) -> list[Trade] | None:
+        eps = 1e-6
         trades = []
         opposite_heap = self.heaps[-direction]
 
-        while order.size > 0 and opposite_heap:
-            maker_price_signed, _, maker_order = opposite_heap[0]
+        while order.size > eps and opposite_heap:
+            _, _, maker_order = opposite_heap[0]
             trade = self.execute(order, maker_order, direction)
-            if trade is None:
+            if trade is not None:
+                trades.append(trade)
+
+            if maker_order.size < eps:
+                heapq.heappop(opposite_heap)
+
+            if direction * (order.price - maker_order.price) < 0:
                 break
 
-            heapq.heappop(opposite_heap)
-            trades.append(trade)
-
-            order.size -= trade.size
-            maker_order.size -= trade.size
-
-            if maker_order.size > 0:  # Put back remaining size
-                heapq.heappush(
-                    opposite_heap,
-                    (maker_price_signed, maker_order.timestamp, maker_order),
-                )
-
-        if order.size > 0:  # Add remaining order to book
+        if order.size > eps:
             heapq.heappush(
                 self.heaps[direction],
                 (order.price * (-direction), order.timestamp, order),
             )
-            return trades if trades else None
-
         return trades
+
+    @typed
+    def __repr__(self) -> str:
+        if not (self.heaps[+1] or self.heaps[-1]):
+            return "Empty order book"
+
+        lines = []
+
+        # Process bids (buy orders)
+        bids = [(-p, t, o) for p, t, o in sorted(self.heaps[+1])]
+        if bids:
+            lines.append("Bids:")
+            for _, _, order in bids[::-1]:
+                lines.append(
+                    f"  {order.price:8.2f} | size: {order.size:8.2f} | agent: {order.agent.id} | timestamp: {order.timestamp:.2f}"
+                )
+
+        # Process asks (sell orders)
+        asks = [(p, t, o) for p, t, o in sorted(self.heaps[-1])]
+        if asks:
+            if bids:
+                lines.append("-" * 50)
+            lines.append("Asks:")
+            for _, _, order in asks:
+                lines.append(
+                    f"  {order.price:8.2f} | size: {order.size:8.2f} | agent: {order.agent.id} | timestamp: {order.timestamp:.2f}"
+                )
+
+        return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    book = OrderBook()
+    np.random.seed(42)
+
+    # Generate random orders
+    n_orders = 20
+    mean_price = 100.0
+    price_std = 2.0
+    size_mean = 5.0
+    size_std = 2.0
+    agent = Agent(
+        id=0,
+        alpha=0.5,
+        k=1.0,
+        sigma=0.0,
+        wealth=1e3,
+        delay=0.0,
+        aggressiveness=0.5,
+        uncertainty=0.0,
+    )
+    agent.position = 1000.0
+
+    # Generate buy and sell orders with Gaussian distributed prices and sizes
+    for i in range(n_orders):
+        # Random price and size
+        price = np.random.normal(mean_price, price_std)
+        size = abs(np.random.normal(size_mean, size_std))
+
+        # Randomly choose buy/sell
+        side = "buy" if np.random.random() < 0.5 else "sell"
+
+        order = Order(
+            side=side,
+            price=price,
+            size=size,
+            timestamp=float(i),
+            agent=agent,
+        )
+        print(order)
+        trades = book.add_order(order)
+        logger.debug(f"Trades: {trades}")
+        print(book)
+        input()

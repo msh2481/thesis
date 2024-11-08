@@ -1,15 +1,27 @@
+import numpy as np
 from agent import sample_agent
 from beartype import beartype as typed
+from loguru import logger
 from numpy.random import default_rng
 from params import some_insight_params
 from price_process import simulate
 from visualization import visualize_agents, visualize_trades
 
+# Configure numpy printing format
+np.set_printoptions(
+    precision=2, suppress=True, formatter={"float": lambda x: f"{x:.2f}"}
+)
+
+logger.remove()
+with open("logs/market_simulation.log", "w") as f:
+    f.flush()
+logger.add("logs/market_simulation.log")
 
 if __name__ == "__main__":
     params = some_insight_params
     print("Sampling initial agents...")
-    rng = default_rng(42)
+    seed = 42
+    rng = default_rng(seed)
     initial_agents = [sample_agent(params, i, rng) for i in range(1000)]
     visualize_agents(
         initial_agents,
@@ -20,9 +32,9 @@ if __name__ == "__main__":
     print("Running simulation...")
     trades, fair_prices, final_agents = simulate(
         params=params,
-        steps=500,
-        # seed=40,
-        n_agents=100,
+        steps=200,
+        seed=seed,
+        n_agents=10,
     )
 
     print("Visualizing results...")

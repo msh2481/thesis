@@ -1,15 +1,25 @@
 import unittest
 from dataclasses import dataclass
 
-from order_book import Order, OrderBook, Trade
+from agent import Agent, Order, Trade
+
+from order_book import OrderBook
 
 
-@dataclass
-class MockAgent:
-    """Mock agent for testing"""
-
-    balance: float = 1000.0  # Large enough balance for test trades
-    position: float = 1000.0  # Large enough position for test trades
+def mock_agent(id: int) -> Agent:
+    agent = Agent(
+        id=id,
+        alpha=0.5,
+        k=1.0,
+        sigma=0.0,
+        wealth=2000.0,
+        delay=0.0,
+        aggressiveness=0.5,
+        uncertainty=0.1,
+    )
+    agent.position = 1000.0
+    agent.balance = 1000.0
+    return agent
 
 
 class TestOrderBook(unittest.TestCase):
@@ -29,12 +39,11 @@ class TestOrderBook(unittest.TestCase):
             price=100.0,
             size=1.0,
             timestamp=1.0,
-            agent_id=1,
-            agent=MockAgent(),
+            agent=mock_agent(1),
         )
         result = self.book.add_order(order)
 
-        self.assertIsNone(result)  # No trades executed
+        self.assertEqual(result, [])  # No trades executed
         self.assertEqual(self.book.get_best_bid(), 100.0)
         self.assertIsNone(self.book.get_best_ask())
 
@@ -45,12 +54,11 @@ class TestOrderBook(unittest.TestCase):
             price=100.0,
             size=1.0,
             timestamp=1.0,
-            agent_id=1,
-            agent=MockAgent(),
+            agent=mock_agent(1),
         )
         result = self.book.add_order(order)
 
-        self.assertIsNone(result)  # No trades executed
+        self.assertEqual(result, [])  # No trades executed
         self.assertIsNone(self.book.get_best_bid())
         self.assertEqual(self.book.get_best_ask(), 100.0)
 
@@ -61,8 +69,7 @@ class TestOrderBook(unittest.TestCase):
             price=100.0,
             size=1.0,
             timestamp=1.0,
-            agent_id=1,
-            agent=MockAgent(),
+            agent=mock_agent(1),
         )
         self.book.add_order(sell_order)
 
@@ -71,12 +78,11 @@ class TestOrderBook(unittest.TestCase):
             price=100.0,
             size=1.0,
             timestamp=2.0,
-            agent_id=2,
-            agent=MockAgent(),
+            agent=mock_agent(2),
         )
         trades = self.book.add_order(buy_order)
 
-        self.assertIsNotNone(trades)
+        self.assertNotEqual(trades, [])
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0].price, 100.0)
         self.assertEqual(trades[0].size, 1.0)
@@ -94,8 +100,7 @@ class TestOrderBook(unittest.TestCase):
             price=100.0,
             size=2.0,
             timestamp=1.0,
-            agent_id=1,
-            agent=MockAgent(),
+            agent=mock_agent(1),
         )
         self.book.add_order(sell_order)
 
@@ -104,12 +109,11 @@ class TestOrderBook(unittest.TestCase):
             price=100.0,
             size=1.0,
             timestamp=2.0,
-            agent_id=2,
-            agent=MockAgent(),
+            agent=mock_agent(2),
         )
         trades = self.book.add_order(buy_order)
 
-        self.assertIsNotNone(trades)
+        self.assertNotEqual(trades, [])
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0].size, 1.0)
 
@@ -120,10 +124,10 @@ class TestOrderBook(unittest.TestCase):
     def test_price_time_priority(self):
         """Test that orders are matched according to price-time priority"""
         # Add two sell orders at different prices
-        self.book.add_order(Order("sell", 101.0, 1.0, 1.0, 1, agent=MockAgent()))
-        self.book.add_order(Order("sell", 100.0, 1.0, 2.0, 2, agent=MockAgent()))
+        self.book.add_order(Order("sell", 101.0, 1.0, 1.0, agent=mock_agent(1)))
+        self.book.add_order(Order("sell", 100.0, 1.0, 2.0, agent=mock_agent(2)))
         # Buy order should match with the better price
-        buy_order = Order("buy", 101.0, 1.0, 3.0, 3, agent=MockAgent())
+        buy_order = Order("buy", 101.0, 1.0, 3.0, agent=mock_agent(3))
         trades = self.book.add_order(buy_order)
 
         self.assertEqual(len(trades), 1)
@@ -132,8 +136,8 @@ class TestOrderBook(unittest.TestCase):
 
     def test_mid_price(self):
         """Test mid price calculation"""
-        self.book.add_order(Order("buy", 99.0, 1.0, 1.0, 1, agent=MockAgent()))
-        self.book.add_order(Order("sell", 101.0, 1.0, 2.0, 2, agent=MockAgent()))
+        self.book.add_order(Order("buy", 99.0, 1.0, 1.0, agent=mock_agent(1)))
+        self.book.add_order(Order("sell", 101.0, 1.0, 2.0, agent=mock_agent(2)))
 
         self.assertEqual(self.book.get_mid_price(), 100.0)
 

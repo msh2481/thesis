@@ -2,7 +2,72 @@ from dataclasses import dataclass
 
 import numpy as np
 from beartype import beartype as typed
-from order_book import Candle, Order
+from beartype.typing import Any, Literal, Self
+
+
+@dataclass
+class Order:
+    side: Literal["buy", "sell"]
+    price: float
+    size: float
+    timestamp: float
+    agent: "Agent"
+
+    def __repr__(self) -> str:
+        return f"Order(side={self.side}; price={self.price:.2f}; size={self.size:.2f}; timestamp={self.timestamp:.2f}; agent_id={self.agent.id})"
+
+
+@dataclass
+class Trade:
+    price: float
+    size: float
+    timestamp: float
+    maker_id: int
+    taker_id: int
+    taker_is_buy: bool
+
+    def __repr__(self) -> str:
+        return f"Trade(price={self.price:.2f}; size={self.size:.2f}; timestamp={self.timestamp:.2f}; maker_id={self.maker_id}; taker_id={self.taker_id}; taker_is_buy={self.taker_is_buy})"
+
+
+@typed
+@dataclass
+class Candle:
+    timestamp: float
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    num_trades: int
+
+    @classmethod
+    def from_trades(cls, trades: list[Trade], start_time: float) -> Self | None:
+        """
+        Construct a candle from a list of trades that occurred in the period.
+
+        Args:
+            trades: List of trades in chronological order
+            start_time: Starting timestamp of the period
+
+        Returns:
+            Candle object or None if no trades occurred
+        """
+        if not trades:
+            return None
+
+        prices = [trade.price for trade in trades]
+        volumes = [trade.size for trade in trades]
+
+        return cls(
+            timestamp=start_time,
+            open=prices[0],
+            high=max(prices),
+            low=min(prices),
+            close=prices[-1],
+            volume=sum(volumes),
+            num_trades=len(trades),
+        )
 
 
 @dataclass
@@ -15,7 +80,7 @@ class AgentEstimate:
 class Agent:
     def __init__(
         self,
-        agent_id: int,
+        id: int,
         alpha: float,  # insight level
         k: float,  # smoothing factor
         sigma: float,  # noise level
@@ -26,7 +91,7 @@ class Agent:
     ):
         assert k >= 1, "Smoothing factor must be at least 1"
 
-        self.id = agent_id
+        self.id = id
         # Agent parameters
         self.alpha = alpha
         self.k = k
@@ -141,8 +206,7 @@ class Agent:
             price=buy_price,
             size=buy_size,
             timestamp=current_time,
-            agent_id=self.id,
-            agent=self,  # Add reference to self
+            agent=self,
         )
 
         sell_order = Order(
@@ -150,11 +214,13 @@ class Agent:
             price=sell_price,
             size=sell_size,
             timestamp=current_time,
-            agent_id=self.id,
-            agent=self,  # Add reference to self
+            agent=self,
         )
 
         return buy_order, sell_order
+
+    def __repr__(self) -> str:
+        return f"Agent(id={self.id}; wealth={self.wealth:.2f}; alpha={self.alpha:.2f}; k={self.k:.2f}; sigma={self.sigma:.2f}; delay={self.delay:.2f}; aggressiveness={self.aggressiveness:.2f}; uncertainty={self.uncertainty:.2f})"
 
 
 @typed
@@ -176,7 +242,7 @@ def sample_agent(params_dict: dict, agent_id: int, rng: np.random.Generator) -> 
     delta = rng.gamma(params_dict["delta_alpha"], params_dict["delta_theta"])
 
     agent = Agent(
-        agent_id=agent_id,
+        id=agent_id,
         alpha=alpha,
         k=k,
         sigma=sigma,
