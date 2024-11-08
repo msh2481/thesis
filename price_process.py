@@ -1,7 +1,9 @@
 import numpy as np
 from agent import Agent, Candle, Order, sample_agent, Trade
 from beartype import beartype as typed
+from jaxtyping import Float
 from loguru import logger
+from numpy import ndarray as ND
 from numpy.random import default_rng
 from order_book import OrderBook
 
@@ -49,6 +51,7 @@ def simulate(
     steps: int,
     n_agents: int = 100,
     seed: int | None = None,
+    debug: bool = False,
 ) -> tuple[list[Trade], list[float], list[Agent]]:
     """Implementation of the persistent process with fixed agent pool"""
     rng = default_rng(seed)
@@ -73,17 +76,15 @@ def simulate(
     agents = []
     for _ in range(n_agents):
         agent = sample_agent(params, next_agent_id, rng)
-        # logger.info(f"Initialized agent {next_agent_id} with wealth {agent.wealth}")
         agents.append(agent)
         next_agent_id += 1
 
     # Simulate trading process
     for t in range(steps):
-        # logger.info(f"Simulating period {t}. Current price: {current_price}")
         period_trades: list[Trade] = []
 
         # Taxes to ensure that all agents have positive wealth
-        tax_rate = 0.01
+        tax_rate = 1e-6
         collected_taxes = 0.0
         for agent in agents:
             amount = agent.wealth * tax_rate
@@ -117,7 +118,7 @@ def simulate(
             agents, size=min(n_active, len(agents)), replace=False
         )
 
-        if t % 500 == 0:
+        if t % 500 == 0 and debug:
             logger.debug(f"Saving agent status at t={t}")
             logger.info(
                 f"Order book size: {sum(len(h) for h in book.heaps.values())} | Current price: {current_price:.2f}"
@@ -132,8 +133,10 @@ def simulate(
                     file=f,
                 )
                 print("-" * 85, file=f)
-                for agent in sorted(agents, key=lambda x: x.wealth, reverse=True):
-                    wealth_change = agent.wealth - agent.initial_wealth
+                for agent in sorted(
+                    agents, key=lambda x: x.wealth / x.initial_wealth, reverse=True
+                ):
+                    wealth_change = agent.wealth / agent.initial_wealth - 1
                     print(
                         f"{agent.id:4d} {agent.alpha/max(agent.sigma, 1e-3):8.3f} {agent.uncertainty:8.3f} "
                         f"{agent.position:12.3f} {agent.balance:12.2f} {agent.wealth:12.2f} {wealth_change:10.2f}",
@@ -170,3 +173,38 @@ def simulate(
         # logger.info(f"Period {t} ends with order book:\n{book}")
 
     return trades, fair_prices, agents
+
+
+@typed
+def synthetic_data(
+    params: dict, steps: int, period: int, n_agents: int = 100, seed: int | None = None
+) -> Float[ND, "steps 6"]:
+    """Generate synthetic data for testing"""
+    trades, fair, _ = simulate(params, steps, n_agents, seed)
+    # Initialize arrays for candle data
+    n_periods = steps // period
+    candle_data = np.zeros((n_periods, 6))  # OHLCV + fair price
+
+    # Group trades into periods
+    for i in range(n_periods):
+        period_start = i * period
+        period_end = (i + 1) * period
+        period_trades = [t for t in trades if period_start <= t.timestamp < period_end]
+
+        if period_trades:
+            candle = Candle.from_trades(period_trades, float(period_start))
+            candle_data[i, 0] = candle.open
+            candle_data[i, 1] = candle.high
+            candle_data[i, 2] = candle.low
+            candle_data[i, 3] = candle.close
+            candle_data[i, 4] = candle.volume
+        else:
+            # If no trades, use previous close or initial fair price
+            prev_close = candle_data[i - 1, 3] if i > 0 else fair[0]
+            candle_data[i, 0:4] = prev_close
+            candle_data[i, 4] = 0
+
+        # Fair price at end of period
+        candle_data[i, 5] = fair[period_end - 1]
+
+    return candle_data

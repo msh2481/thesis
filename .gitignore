@@ -4,3 +4,4 @@ __pycache__
 img/
 *.png
 logs/
+*.pt

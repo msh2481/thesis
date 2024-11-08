@@ -53,10 +53,10 @@ pure_insight_params = {
 }
 
 some_insight_params = {
-    "alpha_0": 8.0,
-    "alpha_1": 2.0,
+    "alpha_0": 1.0,
+    "alpha_1": 1.0,
     "k_alpha": 1.0,
-    "k_theta": 1.0,
+    "k_theta": 1000.0,
     "sigma_alpha": 1.0,
     "sigma_theta": 0.1,
     "w_m": 1000.0,
