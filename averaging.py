@@ -70,21 +70,60 @@ def generate():
     print(samples.shape, targets.shape)
 
 
+k = 10
+
+
+class MLPBlock(t.nn.Module):
+    def __init__(self, features: int):
+        super().__init__()
+        self.features = features
+        self.linear = t.nn.Linear(features, features)
+        self.act = t.nn.Mish()
+
+    def forward(self, x: t.Tensor) -> t.Tensor:
+        return self.act(self.linear(x)) + x
+
+
+class AtLeast1(t.nn.Module):
+    def forward(self, x: t.Tensor) -> t.Tensor:
+        return t.relu(x - 1) + 1
+
+
 def build_model():
-    return t.nn.Linear(5 * k, 1, bias=False)
+    b = 200
+    model = t.nn.Sequential(
+        t.nn.Linear(5 * k, b),
+        MLPBlock(b),
+        MLPBlock(b),
+        t.nn.Linear(b, 1),
+        AtLeast1(),
+    )
+    for m in model.modules():
+        if isinstance(m, t.nn.Linear):
+            t.nn.init.normal_(m.weight, mean=0.0, std=0.01)
+            if m.bias is not None:
+                t.nn.init.zeros_(m.bias)
+    return model
+
+
+def criterion(preds: t.Tensor, targets: t.Tensor) -> t.Tensor:
+    assert (targets > 0).all()
+    assert (preds >= 0).all()
+    assert (preds > 0).all()
+    return t.log(preds / targets).square().sum()
 
 
 def train():
-    k = 10
     model = build_model()
-    optimizer = t.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = t.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-6)
     samples = t.load("data/samples.pt").float()
     targets = t.load("data/targets.pt").float()
 
     # Add validation split
     n_samples = samples.shape[0]
     print("N = ", n_samples)
-    n_train = int(0.8 * n_samples)  # 80% for training
+    n_train = int(0.8 * n_samples)
+    n_val = n_samples - n_train
     indices = t.randperm(n_samples)
 
     train_samples = samples[indices[:n_train]]
@@ -109,9 +148,8 @@ def train():
         model.train()
         preds = model(train_samples).flatten()
         assert preds.shape == train_targets.shape
-        mse = t.nn.functional.mse_loss(preds, train_targets, reduction="sum")
-        reg = 0.5 * model.weight.square().sum()
-        loss = mse + reg
+        mse = criterion(preds, train_targets) / n_train
+        loss = mse
 
         optimizer.zero_grad()
         loss.backward()
@@ -121,13 +159,12 @@ def train():
         model.eval()
         with t.no_grad():
             val_preds = model(val_samples).flatten()
-            val_mse = t.nn.functional.mse_loss(val_preds, val_targets, reduction="sum")
-            val_loss = val_mse + reg
+            val_mse = criterion(val_preds, val_targets) / n_val
+            val_loss = val_mse
 
         # Store losses
         train_losses.append(mse.item())
         val_losses.append(val_mse.item())
-        reg_losses.append(reg.item())
 
         # Early stopping check
         if val_loss < best_val_loss:
@@ -143,7 +180,7 @@ def train():
 
         if i & (i - 1) == 0:
             print(
-                f"Iteration {i:4d} | Train MSE: {mse.item():.6f} | Val MSE: {val_mse.item():.6f} | Reg: {reg.item():.6f}"
+                f"Iteration {i:4d} | Train MSE: {mse.item():.6f} | Val MSE: {val_mse.item():.6f}"
             )
 
     # Plot training history
@@ -175,42 +212,41 @@ def train():
     model.load_state_dict(t.load("models/averaging_model_best.pt"))
 
     # Rest of the visualization code remains the same...
-    weights = model.weight.data.reshape(k, 5)
-    print("\nModel weights (k x 5):")
-    print("-" * 50)
-    print(f"{'Open':>10} {'High':>10} {'Low':>10} {'Close':>10} {'Volume':>10}")
-    print("-" * 50)
-    for row in weights:
-        print("".join(f"{x:10.3f}" for x in row))
-    print("-" * 50)
-    print("\nModel bias:")
-    if model.bias is not None:
-        print(f"{model.bias.data.item():.3f}")
-    else:
-        print("No bias")
+    # weights = model.weight.data.reshape(k, 5)
+    # print("\nModel weights (k x 5):")
+    # print("-" * 50)
+    # print(f"{'Open':>10} {'High':>10} {'Low':>10} {'Close':>10} {'Volume':>10}")
+    # print("-" * 50)
+    # for row in weights:
+    #     print("".join(f"{x:10.3f}" for x in row))
+    # print("-" * 50)
+    # print("\nModel bias:")
+    # if model.bias is not None:
+    #     print(f"{model.bias.data.item():.3f}")
+    # else:
+    #     print("No bias")
 
-    # Save final model state dict
-    t.save(model.state_dict(), "models/averaging_model.pt")
-    print("\nModel saved to models/averaging_model.pt")
+    # # Save final model state dict
+    # t.save(model.state_dict(), "models/averaging_model.pt")
+    # print("\nModel saved to models/averaging_model.pt")
 
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(
-        weights.numpy(),
-        xticklabels=["Open", "High", "Low", "Close", "Volume"],
-        yticklabels=[f"t-{i}" for i in range(weights.shape[0] - 1, -1, -1)],
-        cmap="RdBu",
-        center=0,
-        annot=True,
-        fmt=".3f",
-    )
-    plt.title("Model Weights Heatmap")
-    plt.tight_layout()
-    plt.savefig("img/weights_heatmap.png")
-    plt.close()
+    # plt.figure(figsize=(10, 8))
+    # sns.heatmap(
+    #     weights.numpy(),
+    #     xticklabels=["Open", "High", "Low", "Close", "Volume"],
+    #     yticklabels=[f"t-{i}" for i in range(weights.shape[0] - 1, -1, -1)],
+    #     cmap="RdBu",
+    #     center=0,
+    #     annot=True,
+    #     fmt=".3f",
+    # )
+    # plt.title("Model Weights Heatmap")
+    # plt.tight_layout()
+    # plt.savefig("img/weights_heatmap.png")
+    # plt.close()
 
 
 def predict():
-    k = 10
     model = build_model()
     model.load_state_dict(t.load("models/averaging_model_best.pt"))
     # model.weight.data[:, :] = 0
