@@ -67,7 +67,7 @@ some_insight_params = {
     "sigma_A": 1.0,
     "delta_alpha": 1.0,
     "delta_theta": 0.01,
-    "lambda": 50.0,
+    "lambda": 5.0,
     "price_scale": 0.001,
     "use_levy": True,
     "levy_param": 1.4,

@@ -25,9 +25,7 @@ class OrderBook:
         """Remove all orders with timestamp older than the given timestamp"""
         for side in self.heaps.values():
             side[:] = [
-                (price, timestamp, order)
-                for price, timestamp, order in side
-                if order.timestamp >= timestamp
+                (p, t, order) for p, t, order in side if order.timestamp >= timestamp
             ]
 
     @typed

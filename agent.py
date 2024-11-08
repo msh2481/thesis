@@ -16,6 +16,13 @@ class Order:
     def __repr__(self) -> str:
         return f"Order(side={self.side}; price={self.price:.2f}; size={self.size:.2f}; timestamp={self.timestamp:.2f}; agent_id={self.agent.id})"
 
+    @typed
+    def __lt__(self, other: Any) -> bool:
+        """Less than operator, required for heapq operations.
+        Since Orders are stored in tuples with price and timestamp,
+        this is never actually called, so we just return False."""
+        return False
+
 
 @dataclass
 class Trade:
@@ -192,7 +199,7 @@ class Agent:
         # Calculate order size with reasonable limits
         max_buy_size = self.balance / buy_price  # Maximum size we can buy
         max_sell_size = self.position  # Maximum size we can sell
-        target_size = self.wealth * self.aggressiveness
+        target_size = self.wealth * self.aggressiveness / buy_price
 
         buy_size = min(target_size, max_buy_size)
         sell_size = min(target_size, max_sell_size)

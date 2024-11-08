@@ -73,14 +73,27 @@ def simulate(
     agents = []
     for _ in range(n_agents):
         agent = sample_agent(params, next_agent_id, rng)
-        logger.info(f"Initialized agent {next_agent_id} with wealth {agent.wealth}")
+        # logger.info(f"Initialized agent {next_agent_id} with wealth {agent.wealth}")
         agents.append(agent)
         next_agent_id += 1
 
     # Simulate trading process
     for t in range(steps):
-        logger.info(f"Simulating period {t}. Current price: {current_price}")
+        # logger.info(f"Simulating period {t}. Current price: {current_price}")
         period_trades: list[Trade] = []
+
+        # Taxes to ensure that all agents have positive wealth
+        tax_rate = 0.01
+        collected_taxes = 0.0
+        for agent in agents:
+            amount = agent.wealth * tax_rate
+            agent.balance -= amount
+            agent.wealth -= amount
+            collected_taxes += amount
+        for agent in agents:
+            amount = collected_taxes / len(agents)
+            agent.balance += amount
+            agent.wealth += amount
 
         # Create candle for previous period if there were trades
         if t > 0:
@@ -96,7 +109,6 @@ def simulate(
                     volume=0.0,
                     num_trades=0,
                 )
-            logger.info(f"Created candle {candle}")
             candles.append(candle)
 
         # Sample active agents for this period
@@ -105,37 +117,32 @@ def simulate(
             agents, size=min(n_active, len(agents)), replace=False
         )
 
-        if t % 100 == 0:
+        if t % 500 == 0:
             logger.debug(f"Saving agent status at t={t}")
+            logger.info(
+                f"Order book size: {sum(len(h) for h in book.heaps.values())} | Current price: {current_price:.2f}"
+            )
             with open(f"logs/agents_{t}.txt", "w") as f:
-                print("\nAgent status at t=100:\n", file=f)
                 print(
-                    f"{'ID':>4} {'Alpha':>8} {'Position':>12} {'Balance':>12} {'Wealth':>12} {'Wealth Δ%':>10}",
+                    f"\nAgent status at t={t}:\n",
                     file=f,
                 )
-                print("-" * 65, file=f)
+                print(
+                    f"{'ID':>4} {'Alpha/Sigma':>8} {'Uncert':>8} {'Position':>12} {'Balance':>12} {'Wealth':>12} {'Wealth Δ':>10}",
+                    file=f,
+                )
+                print("-" * 85, file=f)
                 for agent in sorted(agents, key=lambda x: x.wealth, reverse=True):
-                    wealth_change = (agent.wealth / agent.initial_wealth - 1) * 100
+                    wealth_change = agent.wealth - agent.initial_wealth
                     print(
-                        f"{agent.id:4d} {agent.alpha:8.3f} {agent.position:12.3f} "
-                        f"{agent.balance:12.2f} {agent.wealth:12.2f} {wealth_change:10.1f}%",
+                        f"{agent.id:4d} {agent.alpha/max(agent.sigma, 1e-3):8.3f} {agent.uncertainty:8.3f} "
+                        f"{agent.position:12.3f} {agent.balance:12.2f} {agent.wealth:12.2f} {wealth_change:10.2f}",
                         file=f,
                     )
 
         for i, agent in enumerate(active_agents):
             # Update agent's wealth estimate
             agent.update_wealth(current_price)
-
-            # Check if agent needs replacement
-            if agent.wealth < 0.1 * agent.initial_wealth:
-                logger.info(
-                    f"Agent {agent.id} (position={agent.position}; balance={agent.balance}; alpha={agent.alpha}) goes bankrupt"
-                )
-                # Create new agent with same ID but new parameters
-                new_agent = sample_agent(params, agent.id, rng)
-                agents[i] = new_agent
-                logger.info(f"Replaced with new agent: {new_agent}")
-                continue
 
             if candles:
                 _ = agent.update_estimate(
@@ -146,20 +153,20 @@ def simulate(
             orders = agent.generate_orders(float(t), rng)
             if orders is not None:
                 buy_order, sell_order = orders
-                logger.info(
-                    f"Agent {agent.id} (position={agent.position}; balance={agent.balance}; alpha={agent.alpha}) submitted orders:\n"
-                    f"  {buy_order}\n"
-                    f"  {sell_order}"
-                )
+                # logger.info(
+                #     f"Agent {agent.id} (position={agent.position}; balance={agent.balance}; alpha={agent.alpha}) submitted orders:\n"
+                #     f"  {buy_order}\n"
+                #     f"  {sell_order}"
+                # )
                 # Process orders
                 for order in [buy_order, sell_order]:
                     new_trades = book.add_order(order)
                     for trade in new_trades:
-                        logger.info(f"New trade: {trade}")
+                        # logger.info(f"New trade: {trade}")
                         trades.append(trade)
                         period_trades.append(trade)
                         current_price = trade.price
 
-        logger.info(f"Period {t} ends with order book:\n{book}")
+        # logger.info(f"Period {t} ends with order book:\n{book}")
 
     return trades, fair_prices, agents

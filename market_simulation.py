@@ -1,3 +1,5 @@
+import argparse
+
 import numpy as np
 from agent import sample_agent
 from beartype import beartype as typed
@@ -12,16 +14,26 @@ np.set_printoptions(
     precision=2, suppress=True, formatter={"float": lambda x: f"{x:.2f}"}
 )
 
-logger.remove()
-with open("logs/market_simulation.log", "w") as f:
-    f.flush()
-logger.add("logs/market_simulation.log")
+
+@typed
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Market simulation with configurable random seed"
+    )
+    parser.add_argument("seed", type=int, help="Random seed for reproducibility")
+    return parser.parse_args()
+
+
+# logger.remove()
+# with open("logs/market_simulation.log", "w") as f:
+#     f.flush()
+# logger.add("logs/market_simulation.log")
 
 if __name__ == "__main__":
+    args = parse_args()
     params = some_insight_params
     print("Sampling initial agents...")
-    seed = 42
-    rng = default_rng(seed)
+    rng = default_rng(args.seed)
     initial_agents = [sample_agent(params, i, rng) for i in range(1000)]
     visualize_agents(
         initial_agents,
@@ -32,9 +44,9 @@ if __name__ == "__main__":
     print("Running simulation...")
     trades, fair_prices, final_agents = simulate(
         params=params,
-        steps=200,
-        seed=seed,
-        n_agents=10,
+        steps=5000,
+        seed=args.seed,
+        n_agents=50,
     )
 
     print("Visualizing results...")
