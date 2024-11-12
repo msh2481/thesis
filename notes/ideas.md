@@ -1,2 +1,6 @@
 - correlation between wealth and alpha
 - other features to use by agents
+- mech interp:
+    - (anti-dropout & (L_1 or L_log penalty)) for sparsification
+    - replacing layers, or their parts, or even specific paths, with simpler functions
+- G.pt for ESN
