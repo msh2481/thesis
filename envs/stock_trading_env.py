@@ -8,12 +8,13 @@ from beartype import beartype as typed
 from beartype.door import die_if_unbearable as assert_type
 from beartype.typing import TypeAlias
 from jaxtyping import Float, Int
+from loguru import logger
 from numpy import ndarray as ND, random as rd
 
 Money: TypeAlias = float
-Price: TypeAlias = float
 Reward: TypeAlias = float
 QuantityVec: TypeAlias = Int[ND, "stock_dim"]
+PriceVec: TypeAlias = Float[ND, "stock_dim"]
 ActionVec: TypeAlias = Float[ND, "stock_dim"]
 StateVec: TypeAlias = Float[ND, "state_dim"]
 
@@ -26,9 +27,9 @@ class StockTradingEnv(gym.Env):
     @typed
     def __init__(
         self,
-        config: dict,
+        price_array: Float[ND, "time_dim stock_dim"],
+        tech_array: Float[ND, "time_dim tech_dim"],
         gamma: float = 0.99,
-        turbulence_threshold: float = 99,
         min_stock_rate: float = 0.1,
         max_stock: float = 1e2,
         initial_capital: Money = 1e6,
@@ -37,24 +38,10 @@ class StockTradingEnv(gym.Env):
         initial_stocks: QuantityVec | None = None,
     ) -> None:
         """Initialize the stock trading environment."""
-        self.price_array = config["price_array"].astype(np.float32)
-        assert_type(self.price_array, Float[ND, "time_dim stock_dim"])
+        self.price_array = price_array.astype(np.float32)
         self.stock_dim = self.price_array.shape[1]
-
-        self.tech_array = config["tech_array"].astype(np.float32)
-        assert_type(self.tech_array, Float[ND, "time_dim tech_dim"])
+        self.tech_array = tech_array.astype(np.float32)
         self.tech_dim = self.tech_array.shape[1]
-
-        self.turbulence_array = config["turbulence_array"]
-        assert_type(self.turbulence_array, Float[ND, "time_dim"])
-
-        self.turbulence_bool = (self.turbulence_array > turbulence_threshold).astype(
-            np.float32
-        )
-        self.turbulence_array = (
-            self.sigmoid_sign(self.turbulence_array, turbulence_threshold) * 2**-5
-        )
-        self.turbulence_array = self.turbulence_array.astype(np.float32)
 
         self.gamma = gamma
         self.max_stock = max_stock
@@ -80,7 +67,7 @@ class StockTradingEnv(gym.Env):
         self.episode_return = 0.0
 
         self.observation_space = gym.spaces.Box(
-            low=-3000, high=3000, shape=(self.state_dim,), dtype=np.float32
+            low=-1e18, high=1e18, shape=(self.state_dim,), dtype=np.float32
         )
         self.action_space = gym.spaces.Box(
             low=-1, high=1, shape=(self.action_dim,), dtype=np.float32
@@ -97,7 +84,8 @@ class StockTradingEnv(gym.Env):
 
         self.stocks_cool_down = np.zeros_like(self.stocks)
         self.total_asset = self.cash + np.sum(self.stocks * current_price)
-        self.initial_total_asset = self.total_asset
+        self.initial_log_total_asset = self.log_total_asset(current_price)
+        self.last_log_total_asset = self.initial_log_total_asset
         self.gamma_reward = 0.0
 
         return self._get_state(current_price)
@@ -109,33 +97,31 @@ class StockTradingEnv(gym.Env):
         current_price = self.price_array[self.time]
         self.stocks_cool_down += 1
 
-        if not self.turbulence_bool[self.time]:
-            self._execute_actions(actions, current_price)
-        else:
-            self._handle_turbulence(current_price)
+        self._execute_actions(actions, current_price)
 
         state = self._get_state(current_price)
         new_log_total_asset = self.log_total_asset(current_price)
         reward: Reward = new_log_total_asset - self.last_log_total_asset
         self.last_log_total_asset = new_log_total_asset
-        self.total_asset = total_asset
 
         self.gamma_reward = self.gamma_reward * self.gamma + reward
         done = self.time == self.max_step
 
         if done:
             reward = self.gamma_reward
-            self.episode_return = total_asset / self.initial_total_asset
+            log_final = self.last_log_total_asset
+            log_initial = self.initial_log_total_asset
+            self.episode_return = log_final - log_initial
 
         return state, reward, done, {}
 
     @typed
-    def log_total_asset(self, current_price: Price) -> float:
+    def log_total_asset(self, current_price: PriceVec) -> float:
         """Log the total asset."""
         return np.log(max(self.cash + np.sum(self.stocks * current_price), 1.0))
 
     @typed
-    def _execute_actions(self, actions: ActionVec, price: Price) -> None:
+    def _execute_actions(self, actions: ActionVec, price: PriceVec) -> None:
         """Execute buy and sell actions."""
         assert actions.shape == (self.action_dim,)
         action_quantities: QuantityVec = np.round(actions * self.max_stock).astype(int)
@@ -144,26 +130,32 @@ class StockTradingEnv(gym.Env):
         # Sell actions
         sell_indices = np.where(action_quantities < -min_quantity)[0]
         for idx in sell_indices:
-            if price > 0:
+            if price[idx] > 0:
                 sell_qty = min(self.stocks[idx], -action_quantities[idx])
                 self.stocks[idx] -= sell_qty
-                self.cash += price * sell_qty * (1 - self.sell_cost_pct)
+                self.cash += price[idx] * sell_qty * (1 - self.sell_cost_pct)
                 self.stocks_cool_down[idx] = 0
+            else:
+                logger.warning(f"Price is negative for stock {idx}")
 
         # Buy actions
         buy_indices = np.where(action_quantities > min_quantity)[0]
         for idx in buy_indices:
-            if price > 0:
-                buy_qty = min(self.cash // price, action_quantities[idx])
+            if price[idx] > 0:
+                buy_qty = min(self.cash // price[idx], action_quantities[idx])
                 self.stocks[idx] += buy_qty
-                self.cash -= price * buy_qty * (1 + self.buy_cost_pct)
+                self.cash -= price[idx] * buy_qty * (1 + self.buy_cost_pct)
                 self.stocks_cool_down[idx] = 0
+            else:
+                logger.warning(f"Price is negative for stock {idx}")
 
     @typed
-    def _get_state(self, price: Price) -> StateVec:
+    def _get_state(self, price: PriceVec) -> StateVec:
         """Get the current state of the environment."""
-        cash_scaled = np.array([self.cash * 2**-12], dtype=np.float32)
-        price_scaled = price * 2**-6
+        CASH_SCALE = 4000
+        PRICE_SCALE = 100
+        cash_scaled = np.array([self.cash / CASH_SCALE], dtype=np.float32)
+        price_scaled = price / PRICE_SCALE
         stock_scaled = self.stocks / self.max_stock
 
         return np.hstack(
@@ -176,20 +168,41 @@ class StockTradingEnv(gym.Env):
             ]
         )
 
-    @staticmethod
-    def sigmoid_sign(array: np.ndarray, threshold: float) -> np.ndarray:
-        """Apply a sigmoid function to the array."""
-        sigmoid = lambda x: 1 / (1 + np.exp(-x * np.e)) - 0.5
-        return sigmoid(array / threshold) * threshold
 
-
-@typed
-def f(a: Price, b: Money) -> Reward:
-    return a * b
+def test_env_1():
+    """Rewards should be positive and slowly decreasing in the first phase and in the middle, then zero."""
+    n = 20
+    prices = np.stack(
+        [
+            np.linspace(1, 1001, n),
+            np.linspace(1, 2001, n),
+        ],
+        axis=1,
+    )
+    techs = np.stack(
+        [
+            np.linspace(0, 1, n),
+            np.linspace(0, 1, n),
+        ],
+        axis=1,
+    )
+    initial_stocks = np.ones(prices.shape[1], dtype=np.long)
+    env = StockTradingEnv(prices, techs, initial_stocks=initial_stocks)
+    state = env.reset()
+    for _ in range(10):
+        action = np.zeros(env.action_dim)
+        _, reward, done, _ = env.step(action)
+        print(reward, done)
+    action = -np.ones(env.action_dim)
+    _, reward, done, _ = env.step(action)
+    print("---")
+    print(reward, done)
+    print("---")
+    for _ in range(5):
+        action = np.zeros(env.action_dim)
+        _, reward, done, _ = env.step(action)
+        print(reward, done)
 
 
 if __name__ == "__main__":
-    a = Price(3.0)
-    b = Price(2.0)
-    c = f(a, b)
-    print(c)
+    test_env_1()

@@ -5,3 +5,4 @@ img/
 *.png
 logs/
 *.pt
+data/
