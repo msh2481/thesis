@@ -2,6 +2,7 @@
 Based on https://github.com/AI4Finance-Foundation/FinRL-Meta/blob/master/meta/data_processors/yahoofinance.py
 """
 
+import hashlib
 import os
 from datetime import datetime
 
@@ -85,13 +86,6 @@ class BaseSource:
                     time_to_drop = output_df[output_df.isna().any(axis=1)][
                         "time"
                     ].unique()
-                    if len(time_to_drop) > 30:
-                        logger.warning(
-                            f"Time to drop for {indicator} for {unique_ticker[i]}: {time_to_drop}"
-                        )
-                        logger.warning(
-                            self.df[self.df.ticker == unique_ticker[i]].head(10)
-                        )
                     indicator_df = pd.concat(
                         [indicator_df, output_df],
                         axis=0,
@@ -115,13 +109,13 @@ class BaseSource:
         self.df.reset_index(drop=True, inplace=True)
         logger.info("Succesfully add technical indicators")
 
-    def df_to_array(self, tech_indicator_list: list[str]):
+    @typed
+    def df_to_price_and_tech(
+        self, tech_indicator_list: list[str]
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         unique_ticker = self.df.ticker.unique()
         logger.warning(f"Columns: {self.df.columns.values.tolist()}")
-        price_arrays = [
-            self.df[self.df.ticker == ticker].close for ticker in unique_ticker
-        ]
-        price_array = np.column_stack(price_arrays)
+        price_df = self.df.pivot(index="time", columns="ticker", values="close")
         not_tech_indicator_list = ["ticker", "time", "time_idx"]
         full_list = [
             i
@@ -129,16 +123,22 @@ class BaseSource:
             if i not in not_tech_indicator_list
         ]
         logger.info(f"Indicators available: {full_list}")
-        tech_df = self.df[tech_indicator_list]
-        logger.debug(tech_df.head(10))
-        tech_array = np.hstack(
-            [
-                self.df.loc[(self.df.ticker == ticker), tech_indicator_list]
-                for ticker in unique_ticker
-            ]
+        logger.info(f"Indicators requested: {tech_indicator_list}")
+        tech_df = self.df[["time", "ticker"] + tech_indicator_list].pivot(
+            index="time", columns="ticker"
         )
-        logger.info("Successfully transformed into array")
-        return price_array, tech_array
+        logger.debug(tech_df.head(10))
+        logger.info("Successfully transformed into DataFrames")
+        return price_df, tech_df
+
+    @typed
+    def df_to_arrays(
+        self, tech_indicator_list: list[str]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        price_df, tech_df = self.df_to_price_and_tech(tech_indicator_list)
+        # logger.debug(price_df.columns)
+        # logger.debug(tech_df.columns)
+        return price_df.values, tech_df.values
 
     # Standard_time_interval  s: second, m: minute, h: hour, d: day, w: week, M: month, q: quarter, y: year
     # Output time_interval of the processor
@@ -179,6 +179,9 @@ class BaseSource:
         # Check loaded file
         assert "date" in columns or "time" in columns, "date or time column not found"
         assert "close" in columns, "close column not found"
+        # Update start and end date
+        self.start_date = (self.df.date if "date" in columns else self.df.time).min()
+        self.end_date = (self.df.date if "date" in columns else self.df.time).max()
 
 
 class YahooFinance(BaseSource):
@@ -414,44 +417,79 @@ def macd(df: pd.DataFrame) -> pd.DataFrame:
     return df[["time", "ticker", "macd"]]
 
 
-def test_2():
+@typed
+def get_data(
+    tickers: list[str],
+    start_date: str,
+    end_date: str,
+    time_interval: str,
+    computed_indicators: dict[str, Callable[[pd.DataFrame], pd.DataFrame]],
+    final_indicators: list[str],
+) -> tuple[np.ndarray, np.ndarray]:
     processor = YahooFinance(
         data_source="YahooFinance",
-        start_date="2023-01-01",
-        end_date="2024-01-01",
+        start_date=start_date,
+        end_date=end_date,
+        time_interval=time_interval,
+    )
+    ticker_list = ",".join(tickers)
+    hashstr = f"{ticker_list}_{start_date}_{end_date}_{time_interval}"
+    hashstr = hashlib.md5(hashstr.encode()).hexdigest()
+    filename = f"data/{hashstr}.csv"
+
+    if os.path.exists(filename):
+        processor.load_data(filename)
+    else:
+        processor.download_data(tickers, filename)
+        processor.clean_data()
+        processor.save_data(filename)
+
+    processor.add_technical_indicator(computed_indicators)
+    processor.save_data("data/latest.csv")
+    stocks, tech = processor.df_to_arrays(final_indicators)
+    logger.info(f"Stocks shape: {stocks.shape}, Tech shape: {tech.shape}")
+    return stocks, tech
+
+
+@typed
+def plot_data(filename: str, stock: str, indicators: list[str]) -> None:
+    processor = YahooFinance(
+        data_source="YahooFinance",
+        start_date="2024-01-01",  # mock
+        end_date="2024-01-01",  # mock
         time_interval="1D",
     )
-    # processor.load_data("data/test.csv")
-    # processor.clean_data()
-    # processor.save_data("data/test_clean.csv")
-
-    # processor.load_data("data/sp500_2023_2023.csv")
-    # print(len(processor.dataframe.ticker.unique()))
-    # processor.clean_data()
-    # print(len(processor.dataframe.ticker.unique()))
-    # processor.save_data("data/sp500_2023_2023_clean.csv")
-    # exit()
-
-    processor.load_data("data/test_clean.csv")
-    indicators = {"RSI": rsi_14, "MACD": macd}
-    processor.add_technical_indicator(indicators)
-    processor.save_data("data/test_clean_tech.csv")
-    stocks, tech = processor.df_to_array(["rsi_14", "macd"])
-    print(stocks.shape, tech.shape)
-
+    processor.load_data(filename)
+    stocks, tech = processor.df_to_arrays(indicators)
     tickers = processor.df.ticker.unique().tolist()
-    idx = tickers.index("AAPL")
-    stock = stocks[:, idx]
+    idx = tickers.index(stock)
+    price = stocks[:, idx]
     tech = tech[:, idx :: len(tickers)]
-    print(stock.shape, tech.shape)
 
-    stock = (stock - stock.mean()) / stock.std()
+    price = (price - price.mean()) / price.std()
     tech = (tech - tech.mean(axis=0)) / tech.std(axis=0)
-    plt.plot(stock, label="stock")
-    plt.plot(tech[:, 0], label="rsi")
-    plt.plot(tech[:, 1], label="macd")
+    plt.plot(price, label="price")
+    for i, indicator in enumerate(indicators):
+        plt.plot(tech[:, i], label=indicator)
     plt.legend()
     plt.show()
+
+
+def test_2():
+    sp500_table = pd.read_html(
+        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    )
+    sp500_tickers = sp500_table[0]["Symbol"].tolist()
+    stocks, tech = get_data(
+        # ["AAPL"],
+        sp500_tickers,
+        "2023-01-01",
+        "2024-01-01",
+        "1D",
+        {"RSI": rsi_14, "MACD": macd},
+        ["rsi_14", "macd"],
+    )
+    plot_data("data/latest.csv", "AAPL", ["rsi_14", "macd", "open"])
 
 
 if __name__ == "__main__":
