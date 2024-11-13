@@ -13,6 +13,8 @@ import stockstats
 import yfinance as yf
 from beartype import beartype as typed
 from loguru import logger
+from matplotlib import pyplot as plt
+from tqdm.auto import tqdm
 
 # TODO: run LLMs to check this code
 # TODO: find small basis for EMA, TEMA, SMA, SMMA, Moving Linear Regression, TRIX, etc.
@@ -82,12 +84,20 @@ class BaseSource:
             indicator_df = pd.DataFrame()
             for i in range(len(unique_ticker)):
                 try:
-                    temp_indicator = stock[stock.tic == unique_ticker[i]][indicator]
+                    temp_indicator = stock[stock.ticker == unique_ticker[i]][indicator]
                     temp_indicator = pd.DataFrame(temp_indicator)
                     temp_indicator["ticker"] = unique_ticker[i]
                     temp_indicator["time"] = self.dataframe[
-                        self.dataframe.tic == unique_ticker[i]
+                        self.dataframe.ticker == unique_ticker[i]
                     ]["time"].to_list()
+                    time_to_drop = temp_indicator[temp_indicator.isna().any(axis=1)][
+                        "time"
+                    ].unique()
+                    if len(time_to_drop) > 2:
+                        logger.warning(
+                            f"Time to drop for {indicator} for {unique_ticker[i]}: {time_to_drop}"
+                        )
+                        print(stock[stock.ticker == unique_ticker[i]].head(10))
                     indicator_df = pd.concat(
                         [indicator_df, temp_indicator],
                         axis=0,
@@ -105,20 +115,21 @@ class BaseSource:
 
         self.dataframe.sort_values(by=["time", "ticker"], inplace=True)
         if drop_na_timesteps:
+            old_df = self.dataframe.copy()
             time_to_drop = self.dataframe[
                 self.dataframe.isna().any(axis=1)
             ].time.unique()
+            logger.info(f"Times to drop: {time_to_drop}")
             self.dataframe = self.dataframe[~self.dataframe.time.isin(time_to_drop)]
         logger.info("Succesfully add technical indicators")
 
     def df_to_array(self, tech_indicator_list: list[str]):
         unique_ticker = self.dataframe.ticker.unique()
-        price_array = np.column_stack(
-            [
-                self.dataframe[self.dataframe.ticker == tic].close
-                for tic in unique_ticker
-            ]
-        )
+        price_arrays = [
+            self.dataframe[self.dataframe.ticker == ticker].close
+            for ticker in unique_ticker
+        ]
+        price_array = np.column_stack(price_arrays)
         common_tech_indicator_list = [
             i
             for i in tech_indicator_list
@@ -127,19 +138,19 @@ class BaseSource:
         tech_array = np.hstack(
             [
                 self.dataframe.loc[
-                    (self.dataframe.ticker == tic), common_tech_indicator_list
+                    (self.dataframe.ticker == ticker), common_tech_indicator_list
                 ]
-                for tic in unique_ticker
+                for ticker in unique_ticker
             ]
         )
         logger.info("Successfully transformed into array")
         return price_array, tech_array
 
-    # standard_time_interval  s: second, m: minute, h: hour, d: day, w: week, M: month, q: quarter, y: year
-    # output time_interval of the processor
+    # Standard_time_interval  s: second, m: minute, h: hour, d: day, w: week, M: month, q: quarter, y: year
+    # Output time_interval of the processor
     def calc_nonstandard_time_interval(self) -> str:
         assert self.data_source == "yahoofinance"
-        # nonstandard_time_interval: ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d","1wk", "1mo", "3mo"]
+        # Nonstandard time interval: ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d","1wk", "1mo", "3mo"]
         time_intervals = [
             "1m",
             "2m",
@@ -171,13 +182,12 @@ class BaseSource:
         self.dataframe = pd.read_csv(path)
         columns = self.dataframe.columns
         logger.info(f"{path} loaded")
-        # check loaded file
+        # Check loaded file
         assert "date" in columns or "time" in columns, "date or time column not found"
         assert "close" in columns, "close column not found"
 
 
 class YahooFinance(BaseSource):
-    # Add class constants
     SUPPORTED_INTERVALS = {
         "1m",
         "2m",
@@ -311,36 +321,43 @@ class YahooFinance(BaseSource):
         df: pd.DataFrame,
         ticker: str,
         times: list[pd.Timestamp] | list[str],
-    ) -> pd.DataFrame:
-        logger.info(f"Clean data for {ticker}")
-
-        tmp_df = pd.DataFrame(
-            columns=["open", "high", "low", "close", "adjusted_close", "volume"],
-            index=times,
+    ) -> pd.DataFrame | None:
+        # logger.debug(f"Clean data for {ticker}")
+        columns = ["time", "open", "high", "low", "close", "volume", "day"]
+        tmp_df = (
+            df[df.ticker == ticker]
+            .drop(columns=["close"])
+            .rename(columns={"adjusted_close": "close"})
+            .set_index("time")
+            .reindex(times)
+            .reset_index()
         )
 
-        ticker_df = df[df.ticker == ticker]
-        tmp_df.loc[ticker_df["time"]] = ticker_df[tmp_df.columns].values
-
         if pd.isna(tmp_df.iloc[0]["close"]):
-            logger.info("NaN data on start date, fill using first valid data.")
-            first_valid = tmp_df.loc[tmp_df["close"].first_valid_index()]
-            tmp_df.iloc[0] = [
-                first_valid["close"],
-                first_valid["close"],
-                first_valid["close"],
-                first_valid["close"],
-                first_valid["adjusted_close"],
-                0.0,
-            ]
-
+            logger.warning(f"NaN data on start date for {ticker}. Dropping...")
+            return None
+            # logger.info("NaN data on start date, fill using first valid data.")
+            # first_valid = tmp_df.loc[tmp_df["close"].first_valid_index()]
+            # tmp_df.iloc[0][["open", "high", "low", "close", "volume"]] = [
+            #     first_valid["close"],
+            #     first_valid["close"],
+            #     first_valid["close"],
+            #     first_valid["close"],
+            #     0.0,
+            # ]
         tmp_df.loc[pd.isna(tmp_df["volume"]), "volume"] = 0.0
+        tmp_df["time_idx"] = range(len(tmp_df))
+
+        # Day := day - time_idx to meaningfully ffill such arithmetic progressions
+        tmp_df["day"] = (tmp_df["day"] - tmp_df["time_idx"]) % 7
         tmp_df = tmp_df.infer_objects(copy=False).ffill()
+        # Convert back to original day
+        tmp_df["day"] = (tmp_df["day"] + tmp_df["time_idx"]) % 7
 
-        tmp_df = tmp_df.astype(float)
         tmp_df["ticker"] = ticker
+        tmp_df["volume"] = tmp_df["volume"].astype(float)
+        tmp_df = tmp_df[["time_idx"] + columns + ["ticker"]]
 
-        logger.info(f"Data clean for {ticker} is finished.")
         return tmp_df
 
     @typed
@@ -351,13 +368,11 @@ class YahooFinance(BaseSource):
         new_df = pd.DataFrame()
 
         times = self._get_times()
-        for ticker in ticker_list:
+        for ticker in tqdm(ticker_list):
             tmp_df = self._clean_data_for_ticker(df, ticker, times)
-            new_df = pd.concat([new_df, tmp_df], ignore_index=True)
+            if tmp_df is not None:
+                new_df = pd.concat([new_df, tmp_df], ignore_index=True)
 
-        # reset index and rename columns
-        new_df = new_df.reset_index()
-        new_df = new_df.rename(columns={"index": "time"})
         logger.info("Data clean all finished!")
         self.dataframe = new_df
 
@@ -375,9 +390,54 @@ def test():
         end_date="2024-01-01",
         time_interval="1D",
     )
-    processor.download_data(["AAPL", "GOOG"], "data/test2.csv")
+    sp500_table = pd.read_html(
+        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    )
+    sp500_tickers = sp500_table[0]["Symbol"].tolist()
+    print(sp500_tickers)
+    processor.download_data(sp500_tickers, "data/sp500_2023_2023.csv")
     processor.clean_data()
 
 
+def test_2():
+    processor = YahooFinance(
+        data_source="YahooFinance",
+        start_date="2023-01-01",
+        end_date="2024-01-01",
+        time_interval="1D",
+    )
+    # processor.load_data("data/test.csv")
+    # processor.clean_data()
+    # processor.save_data("data/test_clean.csv")
+
+    # processor.load_data("data/sp500_2023_2023.csv")
+    # print(len(processor.dataframe.ticker.unique()))
+    # processor.clean_data()
+    # print(len(processor.dataframe.ticker.unique()))
+    # processor.save_data("data/sp500_2023_2023_clean.csv")
+    # exit()
+
+    processor.load_data("data/sp500_2023_2023_clean.csv")
+    indicators = ["rsi", "macd"]
+    stocks, tech = processor.df_to_array([])
+    processor.add_technical_indicator(indicators)
+    stocks, tech = processor.df_to_array(indicators)
+    print(stocks.shape, tech.shape)
+
+    tickers = processor.dataframe.ticker.unique().tolist()
+    idx = tickers.index("AAPL")
+    stock = stocks[:, idx]
+    tech = tech[:, idx :: len(tickers)]
+    print(stock.shape, tech.shape)
+
+    stock = (stock - stock.mean()) / stock.std()
+    tech = (tech - tech.mean(axis=0)) / tech.std(axis=0)
+    plt.plot(stock, label="stock")
+    plt.plot(tech[:, 0], label="rsi")
+    plt.plot(tech[:, 1], label="macd")
+    plt.legend()
+    plt.show()
+
+
 if __name__ == "__main__":
-    test()
+    test_2()
