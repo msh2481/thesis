@@ -3,6 +3,7 @@ Based on https://github.com/AI4Finance-Foundation/FinRL-Meta/blob/master/meta/da
 """
 
 import os
+from datetime import datetime
 
 import exchange_calendars as tc
 import numpy as np
@@ -14,9 +15,39 @@ from beartype import beartype as typed
 from loguru import logger
 
 # TODO: run LLMs to check this code
+# TODO: find small basis for EMA, TEMA, SMA, SMMA, Moving Linear Regression, TRIX, etc.
+# TODO: find optimal amount of cash to diversify S&P500
 
 
 class BaseSource:
+    # Add class constants
+    REQUIRED_COLUMNS = {"date", "time", "close"}
+    FLOAT_PRECISION = 3
+    DEFAULT_OUTPUT_FILENAME = "dataset.csv"
+
+    @typed
+    def save_data(self, path: str) -> None:
+        try:
+            path, filename = self._parse_save_path(path)
+            os.makedirs(path, exist_ok=True)
+            self.dataframe.to_csv(
+                path + filename, index=False, float_format=f"%.{self.FLOAT_PRECISION}f"
+            )
+        except Exception as e:
+            logger.exception(f"Failed to save data: {e}")
+            raise
+
+    @typed
+    def _parse_save_path(self, path: str) -> tuple[str, str]:
+        """Extract path and filename from full path."""
+        if ".csv" in path:
+            path_parts = path.split("/")
+            return "/".join(path_parts[:-1] + [""]), path_parts[-1]
+        else:
+            return (
+                path if path.endswith("/") else f"{path}/"
+            ), self.DEFAULT_OUTPUT_FILENAME
+
     def add_technical_indicator(
         self,
         tech_indicator_list: list[str],
@@ -135,20 +166,6 @@ class BaseSource:
         else:
             return self.time_interval
 
-    def save_data(self, path):
-        if ".csv" in path:
-            path = path.split("/")
-            filename = path[-1]
-            path = "/".join(path[:-1] + [""])
-        else:
-            if path[-1] == "/":
-                filename = "dataset.csv"
-            else:
-                filename = "/dataset.csv"
-
-        os.makedirs(path, exist_ok=True)
-        self.dataframe.to_csv(path + filename, index=False)
-
     def load_data(self, path):
         assert ".csv" in path
         self.dataframe = pd.read_csv(path)
@@ -160,22 +177,72 @@ class BaseSource:
 
 
 class YahooFinance(BaseSource):
+    # Add class constants
+    SUPPORTED_INTERVALS = {
+        "1m",
+        "2m",
+        "5m",
+        "15m",
+        "30m",
+        "60m",
+        "90m",
+        "1h",
+        "1D",
+        "5D",
+        "1w",
+        "1M",
+        "3M",
+    }
+    TRADING_HOURS = {"start": "09:30:00", "end": "16:00:00"}
+
     @typed
     def __init__(
         self,
         data_source: str,
-        start_date: str,
-        end_date: str,
+        start_date: str | datetime,
+        end_date: str | datetime,
         time_interval: str,
         **kwargs,
     ):
+        if time_interval not in self.SUPPORTED_INTERVALS:
+            raise ValueError(
+                f"Unsupported time interval. Must be one of: {self.SUPPORTED_INTERVALS}"
+            )
+
         self.data_source = data_source
-        self.start_date = start_date
-        self.end_date = end_date
+        self.start_date = (
+            start_date
+            if isinstance(start_date, str)
+            else start_date.strftime("%Y-%m-%d")
+        )
+        self.end_date = (
+            end_date if isinstance(end_date, str) else end_date.strftime("%Y-%m-%d")
+        )
         self.time_interval = time_interval
 
     @typed
     def download_data(self, ticker_list: list[str], save_path: str) -> None:
+        """
+        Download data for given tickers and save to CSV.
+
+        Args:
+            ticker_list: List of stock tickers to download
+            save_path: Path to save the resulting CSV file
+        """
+        try:
+            self._download_ticker_data(ticker_list)
+            self.save_data(save_path)
+            logger.info(
+                f"Download complete! Dataset saved to {save_path}.\n"
+                f"Shape of DataFrame: {self.dataframe.shape}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to download data: {e}")
+            raise
+
+    @typed
+    def _download_ticker_data(self, ticker_list: list[str]) -> None:
+        """Download raw data for each ticker."""
         self.time_zone = pytz.utc
         self.dataframe = pd.DataFrame()
         for ticker in ticker_list:
@@ -207,17 +274,22 @@ class YahooFinance(BaseSource):
         self.dataframe.reset_index(drop=True, inplace=True)
         self.dataframe.sort_values(by=["date", "ticker"], inplace=True)
         self.dataframe.reset_index(drop=True, inplace=True)
-        self.save_data(save_path)
-        logger.info(
-            f"Download complete! Dataset saved to {save_path}.\n"
-            f"Shape of DataFrame: {self.dataframe.shape}"
-        )
 
     @typed
     def _get_times(self) -> list[pd.Timestamp] | list[str]:
         trading_days = self.get_trading_days(start=self.start_date, end=self.end_date)
         if self.time_interval == "1D":
             return trading_days
+        elif self.time_interval == "1h":
+            times = []
+            for day in trading_days:
+                current_time = pd.Timestamp(day + " 09:30:00").tz_localize(
+                    self.time_zone
+                )
+                for _ in range(6):
+                    times.append(current_time)
+                    current_time += pd.Timedelta(hours=1)
+            return times
         elif self.time_interval == "1m":
             times = []
             for day in trading_days:
@@ -241,68 +313,33 @@ class YahooFinance(BaseSource):
         times: list[pd.Timestamp] | list[str],
     ) -> pd.DataFrame:
         logger.info(f"Clean data for {ticker}")
+
         tmp_df = pd.DataFrame(
-            columns=[
-                "open",
-                "high",
-                "low",
-                "close",
-                "adjusted_close",
-                "volume",
-            ],
+            columns=["open", "high", "low", "close", "adjusted_close", "volume"],
             index=times,
         )
-        # Get data for current ticker
+
         ticker_df = df[df.ticker == ticker]
-        # Fill empty DataFrame using original data
-        for i in range(ticker_df.shape[0]):
-            tmp_df.loc[ticker_df.iloc[i]["time"]] = ticker_df.iloc[i][
-                [
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "adjusted_close",
-                    "volume",
-                ]
-            ]
+        tmp_df.loc[ticker_df["time"]] = ticker_df[tmp_df.columns].values
 
-        # If close on start date is NaN, fill data with first valid close and set volume to 0
-        if str(tmp_df.iloc[0]["close"]) == "nan":
+        if pd.isna(tmp_df.iloc[0]["close"]):
             logger.info("NaN data on start date, fill using first valid data.")
-            for i in range(tmp_df.shape[0]):
-                if str(tmp_df.iloc[i]["close"]) != "nan":
-                    first_valid_close = tmp_df.iloc[i]["close"]
-                    first_valid_adjclose = tmp_df.iloc[i]["adjusted_close"]
-
+            first_valid = tmp_df.loc[tmp_df["close"].first_valid_index()]
             tmp_df.iloc[0] = [
-                first_valid_close,
-                first_valid_close,
-                first_valid_close,
-                first_valid_close,
-                first_valid_adjclose,
+                first_valid["close"],
+                first_valid["close"],
+                first_valid["close"],
+                first_valid["close"],
+                first_valid["adjusted_close"],
                 0.0,
             ]
 
-        # Fill NaN data with previous close and set volume to 0.
-        for i in range(tmp_df.shape[0]):
-            if str(tmp_df.iloc[i]["close"]) == "nan":
-                previous_close = tmp_df.iloc[i - 1]["close"]
-                previous_adjusted_close = tmp_df.iloc[i - 1]["adjusted_close"]
-                if str(previous_close) == "nan":
-                    raise ValueError
-                tmp_df.iloc[i] = [
-                    previous_close,
-                    previous_close,
-                    previous_close,
-                    previous_close,
-                    previous_adjusted_close,
-                    0.0,
-                ]
+        tmp_df.loc[pd.isna(tmp_df["volume"]), "volume"] = 0.0
+        tmp_df = tmp_df.infer_objects(copy=False).ffill()
 
-        # Merge single ticker data to new DataFrame
         tmp_df = tmp_df.astype(float)
         tmp_df["ticker"] = ticker
+
         logger.info(f"Data clean for {ticker} is finished.")
         return tmp_df
 
@@ -334,11 +371,11 @@ class YahooFinance(BaseSource):
 def test():
     processor = YahooFinance(
         data_source="YahooFinance",
-        start_date="2024-01-01",
-        end_date="2024-01-05",
+        start_date="2023-01-01",
+        end_date="2024-01-01",
         time_interval="1D",
     )
-    processor.download_data(["AAPL", "GOOG"], "data/test.csv")
+    processor.download_data(["AAPL", "GOOG"], "data/test2.csv")
     processor.clean_data()
 
 
