@@ -9,16 +9,18 @@ import exchange_calendars as tc
 import numpy as np
 import pandas as pd
 import pytz
-import stockstats
 import yfinance as yf
 from beartype import beartype as typed
+from beartype.typing import Callable
 from loguru import logger
 from matplotlib import pyplot as plt
+from talipp.indicators import MACD, RSI
 from tqdm.auto import tqdm
 
 # TODO: run LLMs to check this code
 # TODO: find small basis for EMA, TEMA, SMA, SMMA, Moving Linear Regression, TRIX, etc.
 # TODO: find optimal amount of cash to diversify S&P500
+# TODO: plot cumulative volumes per price level
 
 
 class BaseSource:
@@ -32,7 +34,7 @@ class BaseSource:
         try:
             path, filename = self._parse_save_path(path)
             os.makedirs(path, exist_ok=True)
-            self.dataframe.to_csv(
+            self.df.to_csv(
                 path + filename, index=False, float_format=f"%.{self.FLOAT_PRECISION}f"
             )
         except Exception as e:
@@ -52,7 +54,7 @@ class BaseSource:
 
     def add_technical_indicator(
         self,
-        tech_indicator_list: list[str],
+        indicators: dict[str, Callable[[pd.DataFrame], pd.DataFrame]],
         drop_na_timesteps: int = 1,
     ):
         """
@@ -61,45 +63,37 @@ class BaseSource:
         :param data: (df) pandas dataframe
         :return: (df) pandas dataframe
         """
-        if "date" in self.dataframe.columns.values.tolist():
-            self.dataframe.rename(columns={"date": "time"}, inplace=True)
+        self.df.reset_index(drop=True, inplace=True)
+        if "level_1" in self.df.columns:
+            self.df.drop(columns=["level_1"], inplace=True)
+        if "level_0" in self.df.columns and "ticker" not in self.df.columns:
+            self.df.rename(columns={"level_0": "ticker"}, inplace=True)
 
-        if self.data_source == "ccxt":
-            self.dataframe.rename(columns={"index": "time"}, inplace=True)
-
-        self.dataframe.reset_index(drop=False, inplace=True)
-        if "level_1" in self.dataframe.columns:
-            self.dataframe.drop(columns=["level_1"], inplace=True)
-        if (
-            "level_0" in self.dataframe.columns
-            and "ticker" not in self.dataframe.columns
-        ):
-            self.dataframe.rename(columns={"level_0": "ticker"}, inplace=True)
-
-        logger.info(f"tech_indicator_list: {tech_indicator_list}")
-        stock = stockstats.StockDataFrame.retype(self.dataframe)
-        unique_ticker = stock.ticker.unique()
-        for indicator in tech_indicator_list:
-            logger.info(f"indicator: {indicator}")
+        logger.info(f"Technical indicators: {indicators}")
+        unique_ticker = self.df.ticker.unique()
+        for indicator, func in indicators.items():
+            logger.info(f"Processing indicator: {indicator}")
             indicator_df = pd.DataFrame()
             for i in range(len(unique_ticker)):
                 try:
-                    temp_indicator = stock[stock.ticker == unique_ticker[i]][indicator]
-                    temp_indicator = pd.DataFrame(temp_indicator)
-                    temp_indicator["ticker"] = unique_ticker[i]
-                    temp_indicator["time"] = self.dataframe[
-                        self.dataframe.ticker == unique_ticker[i]
-                    ]["time"].to_list()
-                    time_to_drop = temp_indicator[temp_indicator.isna().any(axis=1)][
+                    input_df = self.df[self.df.ticker == unique_ticker[i]]
+                    assert all(
+                        column in input_df.columns
+                        for column in ["open", "high", "low", "close", "volume"]
+                    ), "Input dataframe must contain columns: open, high, low, close, volume"
+                    output_df = func(input_df)
+                    time_to_drop = output_df[output_df.isna().any(axis=1)][
                         "time"
                     ].unique()
-                    if len(time_to_drop) > 2:
+                    if len(time_to_drop) > 30:
                         logger.warning(
                             f"Time to drop for {indicator} for {unique_ticker[i]}: {time_to_drop}"
                         )
-                        print(stock[stock.ticker == unique_ticker[i]].head(10))
+                        logger.warning(
+                            self.df[self.df.ticker == unique_ticker[i]].head(10)
+                        )
                     indicator_df = pd.concat(
-                        [indicator_df, temp_indicator],
+                        [indicator_df, output_df],
                         axis=0,
                         join="outer",
                         ignore_index=True,
@@ -107,39 +101,39 @@ class BaseSource:
                 except Exception as e:
                     logger.exception(e)
             if not indicator_df.empty:
-                self.dataframe = self.dataframe.merge(
-                    indicator_df[["ticker", "time", indicator]],
+                self.df = self.df.merge(
+                    indicator_df,
                     on=["ticker", "time"],
                     how="left",
                 )
 
-        self.dataframe.sort_values(by=["time", "ticker"], inplace=True)
         if drop_na_timesteps:
-            old_df = self.dataframe.copy()
-            time_to_drop = self.dataframe[
-                self.dataframe.isna().any(axis=1)
-            ].time.unique()
+            old_df = self.df.copy()
+            time_to_drop = self.df[self.df.isna().any(axis=1)].time.unique()
             logger.info(f"Times to drop: {time_to_drop}")
-            self.dataframe = self.dataframe[~self.dataframe.time.isin(time_to_drop)]
+            self.df = self.df[~self.df.time.isin(time_to_drop)]
+        self.df.reset_index(drop=True, inplace=True)
         logger.info("Succesfully add technical indicators")
 
     def df_to_array(self, tech_indicator_list: list[str]):
-        unique_ticker = self.dataframe.ticker.unique()
+        unique_ticker = self.df.ticker.unique()
+        logger.warning(f"Columns: {self.df.columns.values.tolist()}")
         price_arrays = [
-            self.dataframe[self.dataframe.ticker == ticker].close
-            for ticker in unique_ticker
+            self.df[self.df.ticker == ticker].close for ticker in unique_ticker
         ]
         price_array = np.column_stack(price_arrays)
-        common_tech_indicator_list = [
+        not_tech_indicator_list = ["ticker", "time", "time_idx"]
+        full_list = [
             i
-            for i in tech_indicator_list
-            if i in self.dataframe.columns.values.tolist()
+            for i in self.df.columns.values.tolist()
+            if i not in not_tech_indicator_list
         ]
+        logger.info(f"Indicators available: {full_list}")
+        tech_df = self.df[tech_indicator_list]
+        logger.debug(tech_df.head(10))
         tech_array = np.hstack(
             [
-                self.dataframe.loc[
-                    (self.dataframe.ticker == ticker), common_tech_indicator_list
-                ]
+                self.df.loc[(self.df.ticker == ticker), tech_indicator_list]
                 for ticker in unique_ticker
             ]
         )
@@ -179,8 +173,8 @@ class BaseSource:
 
     def load_data(self, path):
         assert ".csv" in path
-        self.dataframe = pd.read_csv(path)
-        columns = self.dataframe.columns
+        self.df = pd.read_csv(path)
+        columns = self.df.columns
         logger.info(f"{path} loaded")
         # Check loaded file
         assert "date" in columns or "time" in columns, "date or time column not found"
@@ -244,7 +238,7 @@ class YahooFinance(BaseSource):
             self.save_data(save_path)
             logger.info(
                 f"Download complete! Dataset saved to {save_path}.\n"
-                f"Shape of DataFrame: {self.dataframe.shape}"
+                f"Shape of DataFrame: {self.df.shape}"
             )
         except Exception as e:
             logger.error(f"Failed to download data: {e}")
@@ -254,7 +248,7 @@ class YahooFinance(BaseSource):
     def _download_ticker_data(self, ticker_list: list[str]) -> None:
         """Download raw data for each ticker."""
         self.time_zone = pytz.utc
-        self.dataframe = pd.DataFrame()
+        self.df = pd.DataFrame()
         for ticker in ticker_list:
             temp_df = yf.download(
                 ticker,
@@ -263,9 +257,9 @@ class YahooFinance(BaseSource):
                 interval=self.time_interval,
             )
             temp_df["ticker"] = ticker
-            self.dataframe = pd.concat([self.dataframe, temp_df], axis=0, join="outer")
-        self.dataframe.reset_index(inplace=True)
-        self.dataframe.columns = [
+            self.df = pd.concat([self.df, temp_df], axis=0, join="outer")
+        self.df.reset_index(inplace=True)
+        self.df.columns = [
             "date",
             "open",
             "high",
@@ -275,15 +269,13 @@ class YahooFinance(BaseSource):
             "volume",
             "ticker",
         ]
-        self.dataframe["day"] = self.dataframe["date"].dt.dayofweek
-        logger.debug(self.dataframe)
-        self.dataframe["date"] = self.dataframe.date.apply(
-            lambda x: x.strftime("%Y-%m-%d")
-        )
-        self.dataframe.dropna(inplace=True)
-        self.dataframe.reset_index(drop=True, inplace=True)
-        self.dataframe.sort_values(by=["date", "ticker"], inplace=True)
-        self.dataframe.reset_index(drop=True, inplace=True)
+        self.df["day"] = self.df["date"].dt.dayofweek
+        logger.debug(self.df)
+        self.df["date"] = self.df.date.apply(lambda x: x.strftime("%Y-%m-%d"))
+        self.df.dropna(inplace=True)
+        self.df.reset_index(drop=True, inplace=True)
+        self.df.sort_values(by=["date", "ticker"], inplace=True)
+        self.df.reset_index(drop=True, inplace=True)
 
     @typed
     def _get_times(self) -> list[pd.Timestamp] | list[str]:
@@ -362,7 +354,7 @@ class YahooFinance(BaseSource):
 
     @typed
     def clean_data(self) -> None:
-        df = self.dataframe.copy()
+        df = self.df.copy()
         df = df.rename(columns={"date": "time"})
         ticker_list = np.unique(df.ticker.values)
         new_df = pd.DataFrame()
@@ -374,7 +366,7 @@ class YahooFinance(BaseSource):
                 new_df = pd.concat([new_df, tmp_df], ignore_index=True)
 
         logger.info("Data clean all finished!")
-        self.dataframe = new_df
+        self.df = new_df
 
     @typed
     def get_trading_days(self, start: str, end: str) -> list[str]:
@@ -399,6 +391,29 @@ def test():
     processor.clean_data()
 
 
+def rsi_14(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    close = df.close.values
+    df["rsi_14"] = RSI(
+        period=14,
+        input_values=close,
+    )
+    return df[["time", "ticker", "rsi_14"]]
+
+
+def macd(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    close = df.close.values
+    output = MACD(
+        fast_period=12,
+        slow_period=26,
+        signal_period=9,
+        input_values=close,
+    )
+    df["macd"] = [value.histogram if value else None for value in output]
+    return df[["time", "ticker", "macd"]]
+
+
 def test_2():
     processor = YahooFinance(
         data_source="YahooFinance",
@@ -417,14 +432,14 @@ def test_2():
     # processor.save_data("data/sp500_2023_2023_clean.csv")
     # exit()
 
-    processor.load_data("data/sp500_2023_2023_clean.csv")
-    indicators = ["rsi", "macd"]
-    stocks, tech = processor.df_to_array([])
+    processor.load_data("data/test_clean.csv")
+    indicators = {"RSI": rsi_14, "MACD": macd}
     processor.add_technical_indicator(indicators)
-    stocks, tech = processor.df_to_array(indicators)
+    processor.save_data("data/test_clean_tech.csv")
+    stocks, tech = processor.df_to_array(["rsi_14", "macd"])
     print(stocks.shape, tech.shape)
 
-    tickers = processor.dataframe.ticker.unique().tolist()
+    tickers = processor.df.ticker.unique().tolist()
     idx = tickers.index("AAPL")
     stock = stocks[:, idx]
     tech = tech[:, idx :: len(tickers)]
