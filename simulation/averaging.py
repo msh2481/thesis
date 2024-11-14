@@ -11,9 +11,9 @@ from numpy import ndarray as ND
 from numpy.random import default_rng
 from params import some_insight_params
 from price_process import simulate, synthetic_data
+from simulation.visualization import visualize_agents, visualize_trades
 from torch import Tensor as TT
 from tqdm.auto import tqdm
-from visualization import visualize_agents, visualize_trades
 
 
 @typed
