@@ -31,7 +31,7 @@ class StockTradingEnv(gym.Env):
         tech_array: Float[ND, "time_dim tech_dim"],
         gamma: float = 0.99,
         min_stock_rate: float = 0.1,
-        max_stock: float = 1e2,
+        max_stock: int = 100,
         initial_capital: Money = 1e6,
         buy_cost_pct: float = 1e-3,
         sell_cost_pct: float = 1e-3,
@@ -52,14 +52,14 @@ class StockTradingEnv(gym.Env):
         self.initial_stocks = (
             initial_stocks
             if initial_stocks is not None
-            else np.zeros(self.stock_dim, dtype=np.float32)
-        )
+            else np.zeros(self.stock_dim, dtype=np.long)
+        ).astype(np.long)
+        self.state_dim = 2 + 3 * self.stock_dim + self.tech_dim
 
         # Environment state variables
         self.reset()
 
         self.env_name = "StockEnv"
-        self.state_dim = 1 + 2 + 3 * self.stock_dim + self.tech_dim
         self.action_dim = self.stock_dim
         self.max_step = self.price_array.shape[0] - 1
         self.if_discrete = False
@@ -152,21 +152,23 @@ class StockTradingEnv(gym.Env):
     @typed
     def _get_state(self, price: PriceVec) -> StateVec:
         """Get the current state of the environment."""
-        CASH_SCALE = 4000
-        PRICE_SCALE = 100
-        cash_scaled = np.array([self.cash / CASH_SCALE], dtype=np.float32)
-        price_scaled = price / PRICE_SCALE
-        stock_scaled = self.stocks / self.max_stock
+        cash_np = np.array([self.cash], dtype=np.float32)
+        stocks_float = self.stocks.astype(np.float32)
+        cooldown_float = self.stocks_cool_down.astype(np.float32)
+        max_stock_np = np.array([self.max_stock], dtype=np.float32)
 
-        return np.hstack(
+        state = np.hstack(
             [
-                cash_scaled,
-                price_scaled,
-                stock_scaled,
-                self.stocks_cool_down,
+                cash_np,
+                price,
+                stocks_float,
+                cooldown_float,
                 self.tech_array[self.time],
+                max_stock_np,
             ]
         )
+        assert state.shape == (self.state_dim,)
+        return state
 
 
 def test_env_1():
