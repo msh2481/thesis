@@ -1,7 +1,7 @@
 import numpy as np
 import torch as t
 from beartype import beartype as typed
-from beartype.typing import Iterator
+from beartype.typing import Iterable
 
 from envs.stock_trading_env import StateVec
 from jaxtyping import Float, Int
@@ -34,12 +34,12 @@ class Actor(nn.Module, ABC):
     def actor(self, state) -> Distribution:
         raise NotImplementedError()
 
-    @abstractmethod
+    @typed
     def actions_are_differentiable(self) -> bool:
         return False
 
     @abstractmethod
-    def actor_parameters(self) -> Iterator[t.nn.Parameter]:
+    def actor_parameters(self) -> Iterable[t.nn.Parameter]:
         raise NotImplementedError()
 
 
@@ -111,6 +111,7 @@ class HODL(Actor):
         super().__init__()
         self.ratio = t.nn.Parameter(t.tensor(0.5))
         self.sigma = t.nn.Buffer(t.tensor(0.1))
+        self.k = t.nn.Buffer(t.tensor(0.1))
         self.stock_dim = stock_dim
         self.tech_dim = tech_dim
         self.state_adapter = StateAdapter(stock_dim, tech_dim)
@@ -118,8 +119,21 @@ class HODL(Actor):
     @typed
     def actor(self, state: StateVec) -> Distribution:
         cash = self.state_adapter.cash(state)
-        in_stocks = self.state_adapter.stocks(state) * self.state_adapter.prices(state)
+        in_stocks = (
+            self.state_adapter.stocks(state) * self.state_adapter.prices(state)
+        ).sum()
         current_ratio = in_stocks / (cash + in_stocks)
-        mu = t.ones(self.stock_dim) * (self.ratio - current_ratio)
+        mu = t.ones(self.stock_dim) * (self.ratio - current_ratio) * self.k
         sigma = t.eye(self.stock_dim) * self.sigma
         return t.distributions.MultivariateNormal(loc=mu, scale_tril=sigma)
+
+    @typed
+    def actions_are_differentiable(self) -> bool:
+        return True
+
+    @typed
+    def actor_parameters(self) -> Iterable[t.nn.Parameter]:
+        return [self.ratio]
+
+
+# TODO: take log of prices and cash before feeding into the model
