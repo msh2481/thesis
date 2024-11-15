@@ -74,8 +74,9 @@ class StockTradingEnv(gym.Env):
         )
 
     @typed
-    def reset(self) -> StateVec:
+    def reset(self, seed: int | None = None) -> StateVec:
         """Reset the environment to the initial state."""
+        super().reset(seed=seed)
         self.time = 0
         current_price = self.price_array[self.time]
 
@@ -105,15 +106,16 @@ class StockTradingEnv(gym.Env):
         self.last_log_total_asset = new_log_total_asset
 
         self.gamma_reward = self.gamma_reward * self.gamma + reward
-        done = self.time == self.max_step
+        terminated = self.time == self.max_step
+        truncated = False
 
-        if done:
+        if terminated:
             reward = self.gamma_reward
             log_final = self.last_log_total_asset
             log_initial = self.initial_log_total_asset
             self.episode_return = log_final - log_initial
 
-        return state, reward, done, {}
+        return state, reward, terminated, truncated, {}
 
     @typed
     def log_total_asset(self, current_price: PriceVec) -> float:
