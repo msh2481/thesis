@@ -11,11 +11,11 @@ import torch as t
 from beartype import beartype as typed
 from beartype.typing import Callable, Iterable, Iterator
 from data_processing import get_data, macd, rsi_14
-from envs.stock_trading_env import StateVec, StockTradingEnv
+from envs.stock_trading_env import ActionVec, StateVec, StockTradingEnv
 from gymnasium import Env
 from jaxtyping import Float, Int
 from loguru import logger
-from models import Actor, HODL, StateAdapter
+from models import Actor, fit_actor, HODL, MountainCarPolicy, StateAdapter
 from numpy import ndarray as ND
 from torch import nn, Tensor as TT
 from torch.distributions import Distribution
@@ -24,47 +24,58 @@ from tqdm.auto import tqdm
 
 
 @typed
-def evaluate_policy(
+def run_policy(
+    policy: Actor,
+    env: Env,
+    save_video_to: str | None = None,
+    observers: dict[str, Callable[[StateVec, float, float], float]] = {},
+) -> tuple[list[tuple], list[float], list[float], dict[str, list[float]]]:
+    states = []
+    terminated = False
+    truncated = False
+    state, _ = env.reset()
+    state_action_pairs = []
+    rewards = []
+    totals = []
+    frames = []
+    metrics = defaultdict(list)
+    total = 0
+    while not terminated and not truncated:
+        if isinstance(state, ND):
+            state = t.tensor(state)
+        action = policy.actor(state).sample()
+        next_state, reward, terminated, truncated, _ = env.step(action.numpy())
+        state_action_pairs.append((state, action))
+        rewards.append(reward)
+        total += reward
+        totals.append(total)
+        state = next_state
+        states.append(state)
+        for observer_name, observer in observers.items():
+            metrics[observer_name].append(observer(state, reward, total))
+        if save_video_to is not None:
+            frames.append(env.render())
+    if save_video_to is not None:
+        imageio.mimsave(save_video_to, frames, fps=30)
+    return state_action_pairs, rewards, totals, metrics
+
+
+@typed
+def demonstrate_policy(
     policy: Actor,
     env: Env,
     num_episodes: int = 100,
     observers: dict[str, Callable[[StateVec, float, float], float]] = {},
-    extra_info: bool = False,
-) -> tuple[float, dict[str, float], Float[ND, "num_episodes num_steps"]] | float:
+) -> tuple[float, dict[str, float], Float[ND, "num_episodes num_steps"]]:
     total_reward = 0
     all_totals = []
     all_metrics = defaultdict(list)
-    episode_iterable = (
-        tqdm(range(num_episodes), desc="Evaluating policy")
-        if extra_info
-        else range(num_episodes)
-    )
-    for _ in episode_iterable:
-        current_totals = []
-        current_total = 0
-        current_metrics = defaultdict(list)
-        state, _ = env.reset()
-        terminated = False
-        truncated = False
-        while not terminated and not truncated:
-            if isinstance(state, ND):
-                state = t.tensor(state)
-            action = policy.actor(state).sample().numpy()
-            next_state, reward, terminated, truncated, _ = env.step(action)
-            current_total += reward
-            state = next_state
-            current_totals.append(current_total)
-            for observer_name, observer in observers.items():
-                current_metrics[observer_name].append(
-                    observer(state, reward, current_total)
-                )
-        total_reward += current_total
-        all_totals.append(current_totals)
+    for _ in tqdm(range(num_episodes), desc="Evaluating policy"):
+        states, rewards, totals, metrics = run_policy(policy, env, observers=observers)
+        total_reward += totals[-1]
+        all_totals.append(totals)
         for observer_name in observers:
-            all_metrics[observer_name].append(current_metrics[observer_name])
-
-    if not extra_info:
-        return total_reward / num_episodes
+            all_metrics[observer_name].append(metrics[observer_name])
 
     max_len = max(len(seq) for seq in all_totals)
     padded_totals = []
@@ -132,39 +143,6 @@ def show_policy(policy: Actor, env: Env, filename: str, fps: int = 30):
 
 
 @typed
-def flatten_model_parameters(model: nn.Module) -> Float[TT, "num_params"]:
-    return t.cat([p.view(-1) for p in model.parameters() if p.requires_grad])
-
-
-@typed
-def unflatten_model_parameters(
-    model: nn.Module,
-    flat_params: Float[TT, "num_params"],
-) -> nn.Module:
-    idx = 0
-    model = deepcopy(model)
-    for p in model.parameters():
-        num_params = p.numel()
-        p.data = flat_params[idx : idx + num_params].view(p.shape)
-        idx += num_params
-    return model
-
-
-@typed
-def estimate_gaussian(
-    samples: Float[TT, "num_samples dim"],
-) -> Distribution:
-    n, d = samples.shape
-    mean = t.zeros(d)
-    cov = t.eye(d)
-    if n > 0:
-        mean = samples.mean(dim=0)
-    if n > 1:
-        cov = ((samples - mean).T @ (samples - mean) + t.eye(d)) / (n - 1)
-    return t.distributions.MultivariateNormal(loc=mean, covariance_matrix=cov)
-
-
-@typed
 def cross_entropy_method(
     create_env: Callable[[], Env],
     policy: Actor,
@@ -173,48 +151,67 @@ def cross_entropy_method(
     buffer_size: int = 100,
     show_policies: bool = True,
     ratio: float = 0.2,
-) -> list[Actor]:
-    w0 = flatten_model_parameters(policy)
-    buffer = [(-float("inf"), w0)]
-    model_qualities = []
-    good_params = []
+    learning_rate: float = 0.01,
+    gradient_steps: int = 10,
+) -> Actor:
+    buffer = []
 
     for epoch in range(n_epochs):
         logger.info(f"Epoch {epoch}")
-        buffer = buffer[-buffer_size:]
-        good_buffer = list(buffer)
-        good_buffer.sort(key=lambda x: x[0], reverse=True)
-        k = max(1, int(len(good_buffer) * ratio))
-        model_qualities = [x[0] for x in good_buffer[:k]]
-        logger.info(f"Mean good quality: {np.mean(model_qualities):.2f}")
-        good_params = [x[1] for x in good_buffer[:k]]
-        dist = estimate_gaussian(t.stack(good_params))
-        samples = dist.sample((n_samples,))
 
+        # Collect trajectories
         returns = []
+        trajectories = []
         if parallel := True:
             with ThreadPoolExecutor(max_workers=4) as executor:
                 futures = []
-                for sample in samples:
+                for _ in range(n_samples):
 
-                    def evaluate_sample(sample):
+                    def collect_trajectory():
                         env = create_env()
-                        unflatten_model_parameters(policy, sample)
-                        mean_return = evaluate_policy(policy, env, num_episodes=1)
-                        return mean_return, sample
+                        state_action_pairs, _, totals, _ = run_policy(policy, env)
+                        return totals[-1], state_action_pairs
 
-                    futures.append(executor.submit(evaluate_sample, sample))
+                    futures.append(executor.submit(collect_trajectory))
 
                 for future in tqdm(as_completed(futures), total=len(futures)):
-                    mean_return, sample = future.result()
-                    returns.append(mean_return)
-                    buffer.append((mean_return, sample))
+                    total_reward, trajectory = future.result()
+                    returns.append(total_reward)
+                    trajectories.append(trajectory)
+                    buffer.append((total_reward, trajectory))
         else:
-            for sample in tqdm(samples, desc="Evaluating samples"):
-                unflatten_model_parameters(policy, sample)
-                mean_return, _, _ = evaluate_policy(policy, env, num_episodes=10)
-                returns.append(mean_return)
-                good_buffer.append((mean_return, sample))
+            for _ in tqdm(range(n_samples), desc="Collecting trajectories"):
+                env = create_env()
+                state_action_pairs, rewards, totals, _ = run_policy(policy, env)
+                total_reward = sum(rewards)
+                returns.append(total_reward)
+                trajectories.append(state_action_pairs)
+                buffer.append((total_reward, state_action_pairs))
+
+        # Keep only best trajectories
+        buffer = buffer[-buffer_size:]
+        good_buffer = sorted(buffer, key=lambda x: x[0], reverse=True)
+        k = max(1, int(len(good_buffer) * ratio))
+        mean_return = np.mean([x[0] for x in good_buffer[:k]])
+        elite_trajectories = [x[1] for x in good_buffer[:k]]
+        logger.info(f"Mean return of elite trajectories: {mean_return:.2f}")
+
+        # Update policy to maximize likelihood of elite trajectories
+        elite_dataset = []
+        for trajectory in elite_trajectories:
+            for state, action in trajectory:
+                if isinstance(state, ND):
+                    state = t.tensor(state)
+                if isinstance(action, ND):
+                    action = t.tensor(action)
+                elite_dataset.append((state, action))
+        fit_actor(
+            policy,
+            elite_dataset,
+            lr=learning_rate,
+            n_epochs=gradient_steps,
+            batch_size=buffer_size,
+        )
 
         returns = np.array(returns)
         quantiles = np.quantile(returns, [0.01, 0.25, 0.5, 0.75, 0.99])
@@ -223,15 +220,10 @@ def cross_entropy_method(
         )
 
         if show_policies:
-            best_policy = unflatten_model_parameters(policy, good_params[0])
             env = create_env()
-            show_policy(best_policy, env, f"logs/policy_{epoch}.mp4")
+            show_policy(policy, env, f"logs/policy_{epoch}.mp4")
 
-    logger.info("Model qualities on last iteration:")
-    for i, m in enumerate(model_qualities):
-        logger.info(f"{i:>2} | {m:.2f}")
-    models = [unflatten_model_parameters(policy, x) for x in good_params]
-    return models, model_qualities
+    return policy
 
 
 def test_evaluation():
@@ -265,7 +257,7 @@ def test_evaluation():
         ratio = in_stocks / (in_stocks + cash)
         return ratio
 
-    mean_log, stats, histories = evaluate_policy(
+    mean_log, stats, histories = demonstrate_policy(
         policy,
         env,
         num_episodes=10,
@@ -273,50 +265,19 @@ def test_evaluation():
     )
 
 
-def test_gaussian_fit():
-    x = np.random.randn(100, 1)
-    y = np.random.randn(100, 1)
-    points = np.concatenate([x + 2 * y, y + 2 * x], axis=1)
-    points = t.tensor(points, dtype=t.float32)
-    points = t.zeros((0, 2))
-    dist = estimate_gaussian(points)
-    more_samples = dist.sample((1000,))
-    plt.scatter(points[:, 0], points[:, 1], label="samples")
-    plt.scatter(more_samples[:, 0], more_samples[:, 1], label="samples", alpha=0.1)
-    plt.legend()
-    plt.show()
-
-
-class MountainCarPolicy(Actor):
-    @typed
-    def __init__(self):
-        super().__init__()
-        self.fc = nn.Linear(2, 16)
-        self.fc2 = nn.Linear(16, 3)
-
-    @typed
-    def actor(self, x: Float[TT, "2"]):
-        x = self.fc(x)
-        x = F.relu(x)
-        x = self.fc2(x)
-        return t.distributions.Categorical(logits=x)
-
-    @typed
-    def actor_parameters(self) -> Iterable[nn.Parameter]:
-        return self.parameters()
-
-
 def test_cem():
     policy = MountainCarPolicy()
-    models, model_qualities = cross_entropy_method(
+    policy, _ = cross_entropy_method(
         lambda: gym.make(
             "MountainCar-v0", render_mode="rgb_array", max_episode_steps=10000
         ),
         policy,
-        n_epochs=20,
-        n_samples=100,
+        n_epochs=100,
+        n_samples=10,
         buffer_size=200,
         show_policies=True,
+        learning_rate=1e-3,
+        gradient_steps=10,
     )
 
 

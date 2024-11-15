@@ -3,11 +3,13 @@ import torch as t
 from beartype import beartype as typed
 from beartype.typing import Iterable
 
-from envs.stock_trading_env import StateVec
+from envs.stock_trading_env import ActionVec, StateVec
 from jaxtyping import Float, Int
 from numpy import ndarray as ND
 from torch import nn, Tensor as TT
 from torch.distributions import Distribution
+from torch.nn import functional as F
+from tqdm.auto import tqdm
 
 """
 First I want a simple model that just keeps a certain ratio of money in stocks, uniformly. 
@@ -137,3 +139,75 @@ class HODL(Actor):
 
 
 # TODO: take log of prices and cash before feeding into the model
+
+
+@typed
+def fit_actor(
+    actor: Actor,
+    dataset: list[tuple[TT, TT]],
+    lr: float,
+    n_epochs: int,
+    batch_size: int,
+):
+    opt = t.optim.Adam(actor.actor_parameters(), lr=lr)
+    pbar = tqdm(range(n_epochs), desc="Fitting actor")
+    first_loss = None
+    for _ in pbar:
+        np.random.shuffle(dataset)
+        batch = []
+        last_loss = None
+        for i, (state, action) in enumerate(dataset):
+            dist = actor.actor(state)
+            loss = -dist.log_prob(action)
+            batch.append(loss)
+            if len(batch) == batch_size or i == len(dataset) - 1:
+                loss_batch = t.stack(batch).mean()
+                opt.zero_grad()
+                loss_batch.backward()
+                opt.step()
+                last_loss = loss_batch.item()
+                if first_loss is None:
+                    first_loss = last_loss
+                batch = []
+                pbar.set_postfix({"loss": f"{first_loss:.4f}->{last_loss:.4f}"})
+
+
+class MountainCarPolicy(Actor):
+    @typed
+    def __init__(self):
+        super().__init__()
+        self.fc = nn.Linear(2, 16)
+        self.fc2 = nn.Linear(16, 3)
+
+    @typed
+    def actor(self, x: Float[TT, "2"]):
+        x = self.fc(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+        return t.distributions.Categorical(logits=x)
+
+    @typed
+    def actor_parameters(self) -> Iterable[nn.Parameter]:
+        return self.parameters()
+
+
+def test_fit():
+    actor = MountainCarPolicy()
+    dataset = [
+        (t.tensor([0.0, 0.0]), t.tensor([0])),
+        (t.tensor([0.2, 0.0]), t.tensor([0])),
+        (t.tensor([1.0, 0.0]), t.tensor([1])),
+        (t.tensor([1.2, 0.0]), t.tensor([1])),
+        (t.tensor([2.0, 0.0]), t.tensor([2])),
+        (t.tensor([2.2, 0.0]), t.tensor([2])),
+    ]
+    fit_actor(actor, dataset, lr=1e-3, n_epochs=1000, batch_size=10)
+
+    for x in t.linspace(0.0, 3.0, 10):
+        state = t.tensor([x, 0.0])
+        dist = actor.actor(state)
+        print(x, dist.logits)
+
+
+if __name__ == "__main__":
+    test_fit()
