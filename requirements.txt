@@ -1,0 +1,25 @@
+# Core ML/Data Libraries
+numpy
+pandas
+torch
+matplotlib
+gymnasium
+
+# Data Sources & Processing
+yfinance
+exchange_calendars
+talipp 
+
+# Visualization
+mplfinance
+imageio
+tqdm
+
+# Type Checking & Logging
+beartype
+jaxtyping
+loguru
+
+# RL Libraries
+elegantrl
+ray[rllib]
