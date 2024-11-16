@@ -18,11 +18,6 @@ from matplotlib import pyplot as plt
 from talipp.indicators import MACD, RSI
 from tqdm.auto import tqdm
 
-# TODO: to trade-off between training on all stocks vs. one stock, make a strategy with a variable number of stocks, and train on (small) random subsets of stocks
-# TODO: find small basis for EMA, TEMA, SMA, SMMA, Moving Linear Regression, TRIX, etc.
-# TODO: find optimal amount of cash to diversify S&P500
-# TODO: plot cumulative volumes per price level
-
 
 class BaseSource:
     # Add class constants

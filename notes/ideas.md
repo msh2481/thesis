@@ -4,3 +4,9 @@
     - (anti-dropout & (L_1 or L_log penalty)) for sparsification
     - replacing layers, or their parts, or even specific paths, with simpler functions
 - G.pt for ESN
+- to trade-off between training on all stocks vs. one stock, make a strategy with a variable number of stocks, and train on (small) random subsets of stocks
+- find small basis for EMA, TEMA, SMA, SMMA, Moving Linear Regression, TRIX, etc.
+- plot cumulative volumes per price level
+- one indicator to rule them all. MLP-like штука, на входе свёртки с затухающими экспонентами и синусоидами (тоже экспоненты по сути, лол), дальше слои вида (a_0 x_0 + ... a_n x_n) / (1 + abs(b_0 x_0 + ... b_n x_n + c_0 abs(x_0) + ... + c_n abs(x_n) )).
+- optimal trading via dynamic programming, then learn it in supervised fashion
+- many elementary RL environments to benchmark various aspects (relevant to trading). e.g. there is basically no exploration problem in trading, it's almost supervised learning, so some problems that occur e.g. in Atari might be irrelevant.
