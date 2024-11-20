@@ -1,12 +1,12 @@
+from copy import deepcopy
+from typing import List, Tuple
+
 import torch as th
 from torch import nn
-from copy import deepcopy
-from typing import Tuple, List
 
-from .AgentBase import AgentBase
-from .AgentBase import build_mlp, layer_init_with_orthogonal
-from ..train import Config
-from ..train import ReplayBuffer
+from ..train import Config, ReplayBuffer
+
+from .AgentBase import AgentBase, build_mlp, layer_init_with_orthogonal
 
 TEN = th.Tensor
 
@@ -16,10 +16,25 @@ class AgentDQN(AgentBase):
     “Human-Level Control Through Deep Reinforcement Learning”. 2015.
     """
 
-    def __init__(self, net_dims: [int], state_dim: int, action_dim: int, gpu_id: int = 0, args: Config = Config()):
-        super().__init__(net_dims=net_dims, state_dim=state_dim, action_dim=action_dim, gpu_id=gpu_id, args=args)
+    def __init__(
+        self,
+        net_dims: list[int],
+        state_dim: int,
+        action_dim: int,
+        gpu_id: int = 0,
+        args: Config = Config(),
+    ):
+        super().__init__(
+            net_dims=net_dims,
+            state_dim=state_dim,
+            action_dim=action_dim,
+            gpu_id=gpu_id,
+            args=args,
+        )
 
-        self.act = QNetwork(net_dims=net_dims, state_dim=state_dim, action_dim=action_dim).to(self.device)
+        self.act = QNetwork(
+            net_dims=net_dims, state_dim=state_dim, action_dim=action_dim
+        ).to(self.device)
         self.act_target = deepcopy(self.act)
         self.act_optimizer = th.optim.Adam(self.act.parameters(), self.learning_rate)
 
@@ -27,26 +42,44 @@ class AgentDQN(AgentBase):
         self.cri_target = self.act_target
         self.cri_optimizer = self.act_optimizer
 
-        self.explore_rate = getattr(args, "explore_rate", 0.25)  # set for `self.act.get_action()`
+        self.explore_rate = getattr(
+            args, "explore_rate", 0.25
+        )  # set for `self.act.get_action()`
         # the probability of choosing action randomly in epsilon-greedy
 
     def explore_action(self, state: TEN) -> TEN:
         return self.act.get_action(state, explore_rate=self.explore_rate)[:, 0]
 
-    def update_objectives(self, buffer: ReplayBuffer, update_t: int) -> Tuple[float, float]:
+    def update_objectives(
+        self, buffer: ReplayBuffer, update_t: int
+    ) -> Tuple[float, float]:
         assert isinstance(update_t, int)
         with th.no_grad():
             if self.if_use_per:
-                (state, action, reward, undone, unmask, next_state,
-                 is_weight, is_index) = buffer.sample_for_per(self.batch_size)
+                (
+                    state,
+                    action,
+                    reward,
+                    undone,
+                    unmask,
+                    next_state,
+                    is_weight,
+                    is_index,
+                ) = buffer.sample_for_per(self.batch_size)
             else:
-                state, action, reward, undone, unmask, next_state = buffer.sample(self.batch_size)
+                state, action, reward, undone, unmask, next_state = buffer.sample(
+                    self.batch_size
+                )
                 is_weight, is_index = None, None
 
-            next_q = self.cri_target.get_q_value(next_state).max(dim=1)[0]  # next q_values
+            next_q = self.cri_target.get_q_value(next_state).max(dim=1)[
+                0
+            ]  # next q_values
             q_label = reward + undone * self.gamma * next_q
 
-        q_value = self.cri.get_q_value(state).squeeze(-1).gather(dim=1, index=action.long())
+        q_value = (
+            self.cri.get_q_value(state).squeeze(-1).gather(dim=1, index=action.long())
+        )
         td_error = self.criterion(q_value, q_label) * unmask
         if self.if_use_per:
             obj_critic = (td_error * is_weight).mean()
@@ -54,8 +87,12 @@ class AgentDQN(AgentBase):
         else:
             obj_critic = td_error.mean()
         if self.lambda_fit_cum_r != 0:
-            cum_reward_mean = buffer.cum_rewards[buffer.ids0, buffer.ids1].detach_().mean()
-            obj_critic += self.criterion(cum_reward_mean, q_value.mean()) * self.lambda_fit_cum_r
+            cum_reward_mean = (
+                buffer.cum_rewards[buffer.ids0, buffer.ids1].detach_().mean()
+            )
+            obj_critic += (
+                self.criterion(cum_reward_mean, q_value.mean()) * self.lambda_fit_cum_r
+            )
         self.optimizer_backward(self.cri_optimizer, obj_critic)
         self.soft_update(self.cri_target, self.cri, self.soft_update_tau)
 
@@ -69,7 +106,9 @@ class AgentDQN(AgentBase):
         horizon_len = rewards.shape[0]
 
         last_state = self.last_state
-        next_value = self.act_target(last_state).argmax(dim=1).detach()  # actor is Q Network in DQN style
+        next_value = (
+            self.act_target(last_state).argmax(dim=1).detach()
+        )  # actor is Q Network in DQN style
         for t in range(horizon_len - 1, -1, -1):
             returns[t] = next_value = rewards[t] + masks[t] * next_value
         return returns
@@ -80,10 +119,21 @@ class AgentDoubleDQN(AgentDQN):
     Double Deep Q-Network algorithm. “Deep Reinforcement Learning with Double Q-learning”. 2015.
     """
 
-    def __init__(self, net_dims: [int], state_dim: int, action_dim: int, gpu_id: int = 0, args: Config = Config()):
-        AgentBase.__init__(self, net_dims, state_dim, action_dim, gpu_id=gpu_id, args=args)
+    def __init__(
+        self,
+        net_dims: [int],
+        state_dim: int,
+        action_dim: int,
+        gpu_id: int = 0,
+        args: Config = Config(),
+    ):
+        AgentBase.__init__(
+            self, net_dims, state_dim, action_dim, gpu_id=gpu_id, args=args
+        )
 
-        self.act = QNetTwin(net_dims=net_dims, state_dim=state_dim, action_dim=action_dim).to(self.device)
+        self.act = QNetTwin(
+            net_dims=net_dims, state_dim=state_dim, action_dim=action_dim
+        ).to(self.device)
         self.act_target = deepcopy(self.act)
         self.act_optimizer = th.optim.Adam(self.act.parameters(), self.learning_rate)
 
@@ -91,33 +141,55 @@ class AgentDoubleDQN(AgentDQN):
         self.cri_target = self.act_target
         self.cri_optimizer = self.act_optimizer
 
-        self.explore_rate = getattr(args, "explore_rate", 0.25)  # set for `self.act.get_action()`
+        self.explore_rate = getattr(
+            args, "explore_rate", 0.25
+        )  # set for `self.act.get_action()`
         # the probability of choosing action randomly in epsilon-greedy
 
-    def update_objectives(self, buffer: ReplayBuffer, update_t: int) -> Tuple[float, float]:
+    def update_objectives(
+        self, buffer: ReplayBuffer, update_t: int
+    ) -> Tuple[float, float]:
         assert isinstance(update_t, int)
         with th.no_grad():
             if self.if_use_per:
-                (state, action, reward, undone, unmask, next_state,
-                 is_weight, is_index) = buffer.sample_for_per(self.batch_size)
+                (
+                    state,
+                    action,
+                    reward,
+                    undone,
+                    unmask,
+                    next_state,
+                    is_weight,
+                    is_index,
+                ) = buffer.sample_for_per(self.batch_size)
             else:
-                state, action, reward, undone, unmask, next_state = buffer.sample(self.batch_size)
+                state, action, reward, undone, unmask, next_state = buffer.sample(
+                    self.batch_size
+                )
                 is_weight, is_index = None, None
 
             next_q = th.min(*self.cri_target.get_q1_q2(next_state)).max(dim=1)[0]
             q_label = reward + undone * self.gamma * next_q
 
-        q_value1, q_value2 = [qs.squeeze(1).gather(dim=1, index=action.long()) for qs in self.cri.get_q1_q2(state)]
-        td_error = (self.criterion(q_value1, q_label) + self.criterion(q_value2, q_label)) * unmask
+        q_value1, q_value2 = [
+            qs.squeeze(1).gather(dim=1, index=action.long())
+            for qs in self.cri.get_q1_q2(state)
+        ]
+        td_error = (
+            self.criterion(q_value1, q_label) + self.criterion(q_value2, q_label)
+        ) * unmask
         if self.if_use_per:
             obj_critic = (td_error * is_weight).mean()
             buffer.td_error_update_for_per(is_index.detach(), td_error.detach())
         else:
             obj_critic = td_error.mean()
         if self.lambda_fit_cum_r != 0:
-            cum_reward_mean = buffer.cum_rewards[buffer.ids0, buffer.ids1].detach_().mean()
-            obj_critic += (self.criterion(cum_reward_mean, q_value1.mean()) +
-                           self.criterion(cum_reward_mean, q_value2.mean()))
+            cum_reward_mean = (
+                buffer.cum_rewards[buffer.ids0, buffer.ids1].detach_().mean()
+            )
+            obj_critic += self.criterion(
+                cum_reward_mean, q_value1.mean()
+            ) + self.criterion(cum_reward_mean, q_value2.mean())
         self.optimizer_backward(self.cri_optimizer, obj_critic)
         self.soft_update(self.cri_target, self.cri, self.soft_update_tau)
 
@@ -125,14 +197,25 @@ class AgentDoubleDQN(AgentDQN):
         return obj_critic.item(), obj_actor.item()
 
 
-'''add dueling q network'''
+"""add dueling q network"""
 
 
 class AgentDuelingDQN(AgentDQN):
-    def __init__(self, net_dims: [int], state_dim: int, action_dim: int, gpu_id: int = 0, args: Config = Config()):
-        AgentBase.__init__(self, net_dims, state_dim, action_dim, gpu_id=gpu_id, args=args)
+    def __init__(
+        self,
+        net_dims: [int],
+        state_dim: int,
+        action_dim: int,
+        gpu_id: int = 0,
+        args: Config = Config(),
+    ):
+        AgentBase.__init__(
+            self, net_dims, state_dim, action_dim, gpu_id=gpu_id, args=args
+        )
 
-        self.act = QNetDuel(net_dims=net_dims, state_dim=state_dim, action_dim=action_dim).to(self.device)
+        self.act = QNetDuel(
+            net_dims=net_dims, state_dim=state_dim, action_dim=action_dim
+        ).to(self.device)
         self.act_target = deepcopy(self.act)
         self.act_optimizer = th.optim.Adam(self.act.parameters(), self.learning_rate)
 
@@ -140,15 +223,28 @@ class AgentDuelingDQN(AgentDQN):
         self.cri_target = self.act_target
         self.cri_optimizer = self.act_optimizer
 
-        self.explore_rate = getattr(args, "explore_rate", 0.25)  # set for `self.act.get_action()`
+        self.explore_rate = getattr(
+            args, "explore_rate", 0.25
+        )  # set for `self.act.get_action()`
         # the probability of choosing action randomly in epsilon-greedy
 
 
 class AgentD3QN(AgentDoubleDQN):  # Dueling Double Deep Q Network. (D3QN)
-    def __init__(self, net_dims: [int], state_dim: int, action_dim: int, gpu_id: int = 0, args: Config = Config()):
-        AgentBase.__init__(self, net_dims, state_dim, action_dim, gpu_id=gpu_id, args=args)
+    def __init__(
+        self,
+        net_dims: [int],
+        state_dim: int,
+        action_dim: int,
+        gpu_id: int = 0,
+        args: Config = Config(),
+    ):
+        AgentBase.__init__(
+            self, net_dims, state_dim, action_dim, gpu_id=gpu_id, args=args
+        )
 
-        self.act = QNetTwinDuel(net_dims=net_dims, state_dim=state_dim, action_dim=action_dim).to(self.device)
+        self.act = QNetTwinDuel(
+            net_dims=net_dims, state_dim=state_dim, action_dim=action_dim
+        ).to(self.device)
         self.act_target = deepcopy(self.act)
         self.act_optimizer = th.optim.Adam(self.act.parameters(), self.learning_rate)
 
@@ -156,11 +252,13 @@ class AgentD3QN(AgentDoubleDQN):  # Dueling Double Deep Q Network. (D3QN)
         self.cri_target = self.act_target
         self.cri_optimizer = self.act_optimizer
 
-        self.explore_rate = getattr(args, "explore_rate", 0.25)  # set for `self.act.get_action()`
+        self.explore_rate = getattr(
+            args, "explore_rate", 0.25
+        )  # set for `self.act.get_action()`
         # the probability of choosing action randomly in epsilon-greedy
 
 
-'''network'''
+"""network"""
 
 
 class QNetBase(nn.Module):  # nn.Module is a standard PyTorch Network
@@ -178,7 +276,9 @@ class QNetBase(nn.Module):  # nn.Module is a standard PyTorch Network
         q_value = self.net(state)
         return q_value
 
-    def get_action(self, state: TEN, explore_rate: float):  # return the index List[int] of discrete action
+    def get_action(
+        self, state: TEN, explore_rate: float
+    ):  # return the index List[int] of discrete action
         if explore_rate < th.rand(1):
             action = self.get_q_value(state).argmax(dim=1, keepdim=True)
         else:

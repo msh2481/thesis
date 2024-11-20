@@ -1,16 +1,16 @@
 import os
+from typing import Optional, Union
+
 import numpy as np
 import torch as th
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
-from typing import Union, Optional
 
-from ..train import Config
-from ..train import ReplayBuffer
+from ..train import Config, ReplayBuffer
 
 TEN = th.Tensor
 
-'''agent'''
+"""agent"""
 
 
 class AgentBase:
@@ -24,48 +24,71 @@ class AgentBase:
     args: the arguments for agent training. `args = Config()`
     """
 
-    def __init__(self, net_dims: [int], state_dim: int, action_dim: int, gpu_id: int = 0, args: Config = Config()):
+    def __init__(
+        self,
+        net_dims: list[int],
+        state_dim: int,
+        action_dim: int,
+        gpu_id: int = 0,
+        args: Config = Config(),
+    ):
         self.if_discrete: bool = args.if_discrete
         self.if_off_policy: bool = args.if_off_policy
 
-        self.net_dims = net_dims  # the networks dimension of each layer
-        self.state_dim = state_dim  # feature number of state
-        self.action_dim = action_dim  # feature number of continuous action or number of discrete action
+        self.net_dims = net_dims
+        self.state_dim = state_dim
+        self.action_dim = action_dim
 
-        self.gamma = args.gamma  # discount factor of future rewards
-        self.max_step = args.max_step  # limits the maximum number of steps an agent can take in a trajectory.
-        self.num_envs = args.num_envs  # the number of sub envs in vectorized env. `num_envs=1` in single env.
-        self.batch_size = args.batch_size  # num of transitions sampled from replay buffer.
-        self.repeat_times = args.repeat_times  # repeatedly update network using ReplayBuffer
-        self.reward_scale = args.reward_scale  # an approximate target reward usually be closed to 256
-        self.learning_rate = args.learning_rate  # the learning rate for network updating
-        self.if_off_policy = args.if_off_policy  # whether off-policy or on-policy of DRL algorithm
-        self.clip_grad_norm = args.clip_grad_norm  # clip the gradient after normalization
-        self.soft_update_tau = args.soft_update_tau  # the tau of soft target update `net = (1-tau)*net + net1`
-        self.state_value_tau = args.state_value_tau  # the tau of normalize for value and state
-        self.buffer_init_size = args.buffer_init_size  # train after samples over buffer_init_size for off-policy
+        self.gamma = args.gamma
+        self.max_step = args.max_step
+        self.num_envs = args.num_envs
+        self.batch_size = args.batch_size
+        self.repeat_times = args.repeat_times
+        self.reward_scale = args.reward_scale
+        self.learning_rate = args.learning_rate
+        self.if_off_policy = args.if_off_policy
+        self.clip_grad_norm = args.clip_grad_norm
+        self.soft_update_tau = args.soft_update_tau
+        self.state_value_tau = args.state_value_tau
+        self.buffer_init_size = args.buffer_init_size
 
-        self.explore_noise_std = getattr(args, 'explore_noise_std', 0.05)  # standard deviation of exploration noise
-        self.last_state: Optional[TEN] = None  # last state of the trajectory. shape == (num_envs, state_dim)
-        self.device = th.device(f"cuda:{gpu_id}" if (th.cuda.is_available() and (gpu_id >= 0)) else "cpu")
+        self.explore_noise_std = getattr(args, "explore_noise_std", 0.05)
+        # last state of the trajectory. shape == (num_envs, state_dim)
+        self.last_state: Optional[TEN] = None
+        self.device = th.device(
+            f"cuda:{gpu_id}" if (th.cuda.is_available() and (gpu_id >= 0)) else "cpu"
+        )
 
-        '''network'''
+        """network"""
         self.act = None
         self.cri = None
         self.act_target = self.act
         self.cri_target = self.cri
 
-        '''optimizer'''
-        self.act_optimizer: Optional[th.optim] = None
-        self.cri_optimizer: Optional[th.optim] = None
+        """optimizer"""
+        self.act_optimizer: Optional[th.optim.Optimizer] = None
+        self.cri_optimizer: Optional[th.optim.Optimizer] = None
 
-        self.criterion = getattr(args, 'criterion', th.nn.MSELoss(reduction="none"))
-        self.if_vec_env = self.num_envs > 1  # use vectorized environment (vectorized simulator)
-        self.if_use_per = getattr(args, 'if_use_per', None)  # use PER (Prioritized Experience Replay)
-        self.lambda_fit_cum_r = getattr(args, 'lambda_fit_cum_r', 0.0)  # critic fits cumulative returns
+        self.criterion = getattr(args, "criterion", th.nn.MSELoss(reduction="none"))
+        self.if_vec_env = (
+            self.num_envs > 1
+        )  # use vectorized environment (vectorized simulator)
+        self.if_use_per = getattr(
+            args, "if_use_per", None
+        )  # use PER (Prioritized Experience Replay)
+        self.lambda_fit_cum_r = getattr(
+            args, "lambda_fit_cum_r", 0.0
+        )  # critic fits cumulative returns
 
         """save and load"""
-        self.save_attr_names = {'act', 'act_target', 'act_optimizer', 'cri', 'cri_target', 'cri_optimizer'}
+        self.save_attr_names = {
+            "act",
+            "act_target",
+            "act_optimizer",
+            "cri",
+            "cri_target",
+            "cri_optimizer",
+        }
 
     def explore_env(self, env, horizon_len: int) -> tuple[TEN, TEN, TEN, TEN, TEN]:
         if self.if_vec_env:
@@ -90,9 +113,14 @@ class AgentBase:
             `undones.shape == (horizon_len, num_envs)`
             `unmasks.shape == (horizon_len, num_envs)`
         """
-        states = th.zeros((horizon_len, self.state_dim), dtype=th.float32).to(self.device)
-        actions = th.zeros((horizon_len, self.action_dim), dtype=th.float32).to(self.device) \
-            if not self.if_discrete else th.zeros(horizon_len, dtype=th.int32).to(self.device)
+        states = th.zeros((horizon_len, self.state_dim), dtype=th.float32).to(
+            self.device
+        )
+        actions = (
+            th.zeros((horizon_len, self.action_dim), dtype=th.float32).to(self.device)
+            if not self.if_discrete
+            else th.zeros(horizon_len, dtype=th.int32).to(self.device)
+        )
         rewards = th.zeros(horizon_len, dtype=th.float32).to(self.device)
         terminals = th.zeros(horizon_len, dtype=th.bool).to(self.device)
         truncates = th.zeros(horizon_len, dtype=th.bool).to(self.device)
@@ -110,18 +138,25 @@ class AgentBase:
             ary_state, reward, terminal, truncate, _ = env.step(ary_action)
             if terminal or truncate:
                 ary_state, info_dict = env.reset()
-            state = th.as_tensor(ary_state, dtype=th.float32, device=self.device).unsqueeze(0)
+            state = th.as_tensor(
+                ary_state, dtype=th.float32, device=self.device
+            ).unsqueeze(0)
 
             rewards[t] = reward
             terminals[t] = terminal
             truncates[t] = truncate
 
         self.last_state = state  # state.shape == (1, state_dim) for a single env.
-        '''add dim1=1 below for workers buffer_items concat'''
+        """add dim1=1 below for workers buffer_items concat"""
         states = states.view((horizon_len, 1, self.state_dim))
-        actions = actions.view((horizon_len, 1, self.action_dim if not self.if_discrete else 1))
-        actions = actions.view((horizon_len, 1, self.action_dim)) \
-            if not self.if_discrete else actions.view((horizon_len, 1))
+        actions = actions.view(
+            (horizon_len, 1, self.action_dim if not self.if_discrete else 1)
+        )
+        actions = (
+            actions.view((horizon_len, 1, self.action_dim))
+            if not self.if_discrete
+            else actions.view((horizon_len, 1))
+        )
         rewards = (rewards * self.reward_scale).view((horizon_len, 1))
         undones = th.logical_not(terminals).view((horizon_len, 1))
         unmasks = th.logical_not(truncates).view((horizon_len, 1))
@@ -141,12 +176,25 @@ class AgentBase:
             `undones.shape == (horizon_len, num_envs)`
             `unmasks.shape == (horizon_len, num_envs)`
         """
-        states = th.zeros((horizon_len, self.num_envs, self.state_dim), dtype=th.float32).to(self.device)
-        actions = th.zeros((horizon_len, self.num_envs, self.action_dim), dtype=th.float32).to(self.device) \
-            if not self.if_discrete else th.zeros((horizon_len, self.num_envs), dtype=th.int32).to(self.device)
-        rewards = th.zeros((horizon_len, self.num_envs), dtype=th.float32).to(self.device)
-        terminals = th.zeros((horizon_len, self.num_envs), dtype=th.bool).to(self.device)
-        truncates = th.zeros((horizon_len, self.num_envs), dtype=th.bool).to(self.device)
+        states = th.zeros(
+            (horizon_len, self.num_envs, self.state_dim), dtype=th.float32
+        ).to(self.device)
+        actions = (
+            th.zeros(
+                (horizon_len, self.num_envs, self.action_dim), dtype=th.float32
+            ).to(self.device)
+            if not self.if_discrete
+            else th.zeros((horizon_len, self.num_envs), dtype=th.int32).to(self.device)
+        )
+        rewards = th.zeros((horizon_len, self.num_envs), dtype=th.float32).to(
+            self.device
+        )
+        terminals = th.zeros((horizon_len, self.num_envs), dtype=th.bool).to(
+            self.device
+        )
+        truncates = th.zeros((horizon_len, self.num_envs), dtype=th.bool).to(
+            self.device
+        )
 
         state = self.last_state  # last_state.shape == (num_envs, state_dim)
         for t in range(horizon_len):
@@ -174,12 +222,16 @@ class AgentBase:
         objs_actor = []
 
         if self.lambda_fit_cum_r != 0:
-            buffer.update_cum_rewards(get_cumulative_rewards=self.get_cumulative_rewards)
+            buffer.update_cum_rewards(
+                get_cumulative_rewards=self.get_cumulative_rewards
+            )
 
         th.set_grad_enabled(True)
         update_times = int(buffer.cur_size * self.repeat_times / self.batch_size)
         for update_t in range(update_times):
-            obj_critic, obj_actor = self.update_objectives(buffer=buffer, update_t=update_t)
+            obj_critic, obj_actor = self.update_objectives(
+                buffer=buffer, update_t=update_t
+            )
             objs_critic.append(obj_critic)
             objs_actor.append(obj_actor) if isinstance(obj_actor, float) else None
         th.set_grad_enabled(False)
@@ -188,14 +240,26 @@ class AgentBase:
         obj_avg_actor = np.nanmean(objs_actor) if len(objs_actor) else 0.0
         return obj_avg_critic, obj_avg_actor
 
-    def update_objectives(self, buffer: ReplayBuffer, update_t: int) -> tuple[float, float]:
+    def update_objectives(
+        self, buffer: ReplayBuffer, update_t: int
+    ) -> tuple[float, float]:
         assert isinstance(update_t, int)
         with th.no_grad():
             if self.if_use_per:
-                (state, action, reward, undone, unmask, next_state,
-                 is_weight, is_index) = buffer.sample_for_per(self.batch_size)
+                (
+                    state,
+                    action,
+                    reward,
+                    undone,
+                    unmask,
+                    next_state,
+                    is_weight,
+                    is_index,
+                ) = buffer.sample_for_per(self.batch_size)
             else:
-                state, action, reward, undone, unmask, next_state = buffer.sample(self.batch_size)
+                state, action, reward, undone, unmask, next_state = buffer.sample(
+                    self.batch_size
+                )
                 is_weight, is_index = None, None
 
             next_action = self.act(next_state)  # deterministic policy
@@ -244,10 +308,14 @@ class AgentBase:
         """
         optimizer.zero_grad()
         objective.backward()
-        clip_grad_norm_(parameters=optimizer.param_groups[0]["params"], max_norm=self.clip_grad_norm)
+        clip_grad_norm_(
+            parameters=optimizer.param_groups[0]["params"], max_norm=self.clip_grad_norm
+        )
         optimizer.step()
 
-    def optimizer_backward_amp(self, optimizer: th.optim, objective: TEN):  # automatic mixed precision
+    def optimizer_backward_amp(
+        self, optimizer: th.optim, objective: TEN
+    ):  # automatic mixed precision
         """minimize the optimization objective via update the network parameters
 
         amp: Automatic Mixed Precision
@@ -262,7 +330,9 @@ class AgentBase:
         amp_scale.unscale_(optimizer)  # amp
 
         # from th.nn.utils import clip_grad_norm_
-        clip_grad_norm_(parameters=optimizer.param_groups[0]["params"], max_norm=self.clip_grad_norm)
+        clip_grad_norm_(
+            parameters=optimizer.param_groups[0]["params"], max_norm=self.clip_grad_norm
+        )
         amp_scale.step(optimizer)  # optimizer.step()
         amp_scale.update()  # optimizer.step()
 
@@ -283,7 +353,7 @@ class AgentBase:
         cwd: Current Working Directory. ElegantRL save training files in CWD.
         if_save: True: save files. False: load files.
         """
-        assert self.save_attr_names.issuperset({'act', 'act_optimizer'})
+        assert self.save_attr_names.issuperset({"act", "act_optimizer"})
 
         for attr_name in self.save_attr_names:
             file_path = f"{cwd}/{attr_name}.pth"
@@ -300,11 +370,13 @@ class AgentBase:
 def get_optim_param(optimizer: th.optim) -> list:  # backup
     params_list = []
     for params_dict in optimizer.state_dict()["state"].values():
-        params_list.extend([t for t in params_dict.values() if isinstance(t, th.Tensor)])
+        params_list.extend(
+            [t for t in params_dict.values() if isinstance(t, th.Tensor)]
+        )
     return params_list
 
 
-'''network'''
+"""network"""
 
 
 class ActorBase(nn.Module):
@@ -342,7 +414,9 @@ class CriticBase(nn.Module):
 """utils"""
 
 
-def build_mlp(dims: [int], activation: nn = None, if_raw_out: bool = True) -> nn.Sequential:
+def build_mlp(
+    dims: [int], activation: nn = None, if_raw_out: bool = True
+) -> nn.Sequential:
     """
     build MLP (MultiLayer Perceptron)
 
@@ -356,7 +430,9 @@ def build_mlp(dims: [int], activation: nn = None, if_raw_out: bool = True) -> nn
     for i in range(len(dims) - 1):
         net_list.extend([nn.Linear(dims[i], dims[i + 1]), activation()])
     if if_raw_out:
-        del net_list[-1]  # delete the activation function of the output layer to keep raw output
+        del net_list[
+            -1
+        ]  # delete the activation function of the output layer to keep raw output
     return nn.Sequential(*net_list)
 
 
@@ -384,9 +460,7 @@ class DenseNet(nn.Module):  # plan to hyper-param: layer_number
 
     def forward(self, x1):  # x1.shape==(-1, lay_dim*1)
         x2 = th.cat((x1, self.dense1(x1)), dim=1)
-        return th.cat(
-            (x2, self.dense2(x2)), dim=1
-        )  # x3  # x2.shape==(-1, lay_dim*4)
+        return th.cat((x2, self.dense2(x2)), dim=1)  # x3  # x2.shape==(-1, lay_dim*4)
 
 
 class ConvNet(nn.Module):  # pixel-level state encoder
@@ -442,7 +516,9 @@ class ConvNet(nn.Module):  # pixel-level state encoder
         # from elegantrl.net import Conv2dNet
         net = ConvNet(inp_dim, out_dim, image_size)
 
-        image = th.ones((batch_size, image_size, image_size, inp_dim), dtype=th.uint8) * 255
+        image = (
+            th.ones((batch_size, image_size, image_size, inp_dim), dtype=th.uint8) * 255
+        )
         print(image.shape)
         output = net(image)
         print(output.shape)
