@@ -247,17 +247,7 @@ class YahooFinance(BaseSource):
         """Download raw data for each ticker."""
         self.time_zone = pytz.utc
         self.df = pd.DataFrame()
-        for ticker in ticker_list:
-            temp_df = yf.download(
-                ticker,
-                start=self.start_date,
-                end=self.end_date,
-                interval=self.time_interval,
-            )
-            temp_df["ticker"] = ticker
-            self.df = pd.concat([self.df, temp_df], axis=0, join="outer")
-        self.df.reset_index(inplace=True)
-        self.df.columns = [
+        column_names = [
             "date",
             "open",
             "high",
@@ -267,6 +257,19 @@ class YahooFinance(BaseSource):
             "volume",
             "ticker",
         ]
+        for ticker in ticker_list:
+            temp_df = yf.download(
+                ticker,
+                start=self.start_date,
+                end=self.end_date,
+                interval=self.time_interval,
+            )
+            temp_df["ticker"] = ticker
+            temp_df.reset_index(inplace=True, drop=False)
+            temp_df.columns = column_names
+            self.df = pd.concat([self.df, temp_df], axis=0, join="outer")
+        print(self.df.head())
+        self.df.columns = column_names
         self.df["day"] = self.df["date"].dt.dayofweek
         logger.debug(self.df)
         self.df["date"] = self.df.date.apply(lambda x: x.strftime("%Y-%m-%d"))

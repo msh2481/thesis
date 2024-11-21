@@ -43,7 +43,7 @@ class StockTradingEnv(gym.Env):
         self.tech_array = tech_array.astype(np.float32)
         self.tech_dim = self.tech_array.shape[1]
 
-        self.gamma = gamma
+        # self.gamma = gamma
         self.max_stock = max_stock
         self.min_action_fraction = min_stock_rate
         self.buy_cost_pct = buy_cost_pct
@@ -52,8 +52,8 @@ class StockTradingEnv(gym.Env):
         self.initial_stocks = (
             initial_stocks
             if initial_stocks is not None
-            else np.zeros(self.stock_dim, dtype=np.long)
-        ).astype(np.long)
+            else np.zeros(self.stock_dim, dtype=np.int64)
+        ).astype(np.int64)
         self.state_dim = 2 + 3 * self.stock_dim + self.tech_dim
 
         # Environment state variables
@@ -74,7 +74,7 @@ class StockTradingEnv(gym.Env):
         )
 
     @typed
-    def reset(self, seed: int | None = None) -> StateVec:
+    def reset(self, seed: int | None = None) -> tuple[StateVec, dict]:
         """Reset the environment to the initial state."""
         super().reset(seed=seed)
         self.time = 0
@@ -87,12 +87,12 @@ class StockTradingEnv(gym.Env):
         self.total_asset = self.cash + np.sum(self.stocks * current_price)
         self.initial_log_total_asset = self.log_total_asset(current_price)
         self.last_log_total_asset = self.initial_log_total_asset
-        self.gamma_reward = 0.0
+        # self.gamma_reward = 0.0
 
-        return self._get_state(current_price)
+        return self._get_state(current_price).astype(np.float32), {}
 
     @typed
-    def step(self, actions: ActionVec) -> tuple[StateVec, Reward, bool, dict]:
+    def step(self, actions: ActionVec) -> tuple[StateVec, Reward, bool, bool, dict]:
         """Take an action in the environment."""
         self.time += 1
         current_price = self.price_array[self.time]
@@ -102,15 +102,16 @@ class StockTradingEnv(gym.Env):
 
         state = self._get_state(current_price)
         new_log_total_asset = self.log_total_asset(current_price)
-        reward: Reward = new_log_total_asset - self.last_log_total_asset
+        reward = new_log_total_asset - self.last_log_total_asset
+        # reward = np.array(reward, dtype=np.float64)
         self.last_log_total_asset = new_log_total_asset
 
-        self.gamma_reward = self.gamma_reward * self.gamma + reward
+        # self.gamma_reward = self.gamma_reward * self.gamma + reward
         terminated = self.time == self.max_step
         truncated = False
 
         if terminated:
-            reward = self.gamma_reward
+            # reward = self.gamma_reward
             log_final = self.last_log_total_asset
             log_initial = self.initial_log_total_asset
             self.episode_return = log_final - log_initial

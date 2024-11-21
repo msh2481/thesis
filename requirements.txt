@@ -21,5 +21,4 @@ jaxtyping
 loguru
 
 # RL Libraries
-elegantrl
-ray[rllib]
+stable_baselines3[extra]

@@ -282,4 +282,4 @@ def test_cem():
 
 
 if __name__ == "__main__":
-    test_cem()
+    test_evaluation()
