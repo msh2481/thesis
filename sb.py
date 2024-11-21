@@ -49,15 +49,38 @@ def train():
     env = SubprocVecEnv([env_func for _ in range(4)])
     model = PPO("MlpPolicy", env, verbose=1)
     logger.info("Training model...")
-    model.learn(total_timesteps=3 * 10**5)
-    model.save(env_name)
-    logger.info("Evaluating model...")
-    mean_reward, std_reward = evaluate_policy(
-        model,
-        model.get_env(),
-        n_eval_episodes=10,
-    )
-    logger.info(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+
+    for _ in range(10):
+        model.learn(total_timesteps=10**4)
+        model.save(env_name)
+        logger.info("Evaluating model...")
+
+        env = StockTradingEnv(stocks, tech)
+        mean_reward, std_reward = evaluate_policy(
+            model,
+            env,
+            n_eval_episodes=10,
+        )
+        logger.info(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+
+        env = StockTradingEnv(stocks, tech)
+        env = DummyVecEnv([lambda: env])  # type: ignore[list-item, return-value]
+        mean_reward, std_reward = evaluate_policy(
+            model,
+            env,
+            n_eval_episodes=10,
+        )
+        logger.info(
+            f"Mean reward (dummy VecEnv): {mean_reward:.2f} +/- {std_reward:.2f}"
+        )
+
+        env = StockTradingEnv(stocks_old, tech_old)
+        mean_reward, std_reward = evaluate_policy(
+            model,
+            env,
+            n_eval_episodes=10,
+        )
+        logger.info(f"Mean reward (old data): {mean_reward:.2f} +/- {std_reward:.2f}")
 
 
 def demo():
@@ -196,6 +219,6 @@ def test2():
 
 
 if __name__ == "__main__":
-    # train()
-    demo()
+    train()
+    # demo()
     # test2()

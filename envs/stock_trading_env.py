@@ -12,7 +12,7 @@ from loguru import logger
 from numpy import ndarray as ND, random as rd
 
 Money: TypeAlias = float
-Reward: TypeAlias = float
+Reward: TypeAlias = Float[ND, ""]
 QuantityVec: TypeAlias = Int[ND, "stock_dim"]
 PriceVec: TypeAlias = Float[ND, "stock_dim"]
 ActionVec: TypeAlias = Float[ND, "stock_dim"]
@@ -29,13 +29,12 @@ class StockTradingEnv(gym.Env):
         self,
         price_array: Float[ND, "time_dim stock_dim"],
         tech_array: Float[ND, "time_dim tech_dim"],
-        gamma: float = 0.99,
         min_stock_rate: float = 0.1,
         max_stock: int = 100,
-        initial_capital: Money = 1e6,
+        initial_capital: Money = 0.0,
         buy_cost_pct: float = 1e-3,
         sell_cost_pct: float = 1e-3,
-        initial_stocks: QuantityVec | None = None,
+        initial_stocks: QuantityVec | int = 100,
     ) -> None:
         """Initialize the stock trading environment."""
         self.price_array = price_array.astype(np.float32)
@@ -43,7 +42,6 @@ class StockTradingEnv(gym.Env):
         self.tech_array = tech_array.astype(np.float32)
         self.tech_dim = self.tech_array.shape[1]
 
-        # self.gamma = gamma
         self.max_stock = max_stock
         self.min_action_fraction = min_stock_rate
         self.buy_cost_pct = buy_cost_pct
@@ -51,8 +49,8 @@ class StockTradingEnv(gym.Env):
         self.initial_capital = initial_capital
         self.initial_stocks = (
             initial_stocks
-            if initial_stocks is not None
-            else np.zeros(self.stock_dim, dtype=np.int64)
+            if not isinstance(initial_stocks, int)
+            else np.full(self.stock_dim, initial_stocks, dtype=np.int64)
         ).astype(np.int64)
         self.state_dim = 2 + 3 * self.stock_dim + self.tech_dim
 
@@ -87,9 +85,8 @@ class StockTradingEnv(gym.Env):
         self.total_asset = self.cash + np.sum(self.stocks * current_price)
         self.initial_log_total_asset = self.log_total_asset(current_price)
         self.last_log_total_asset = self.initial_log_total_asset
-        # self.gamma_reward = 0.0
 
-        return self._get_state(current_price).astype(np.float32), {}
+        return self._get_state(current_price), {}
 
     @typed
     def step(self, actions: ActionVec) -> tuple[StateVec, Reward, bool, bool, dict]:
@@ -103,10 +100,9 @@ class StockTradingEnv(gym.Env):
         state = self._get_state(current_price)
         new_log_total_asset = self.log_total_asset(current_price)
         reward = new_log_total_asset - self.last_log_total_asset
-        # reward = np.array(reward, dtype=np.float64)
+        reward = np.array(reward, dtype=np.float32)
         self.last_log_total_asset = new_log_total_asset
 
-        # self.gamma_reward = self.gamma_reward * self.gamma + reward
         terminated = self.time == self.max_step
         truncated = False
 
