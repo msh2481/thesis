@@ -32,14 +32,14 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 # np.save("stocks_old.npy", stocks_old)
 # np.save("tech_old.npy", tech_old)
 
-stocks = np.load("stocks.npy")
-tech = np.load("tech.npy")
+stocks_new = np.load("stocks_new.npy")
+tech_new = np.load("tech_new.npy")
 stocks_old = np.load("stocks_old.npy")
 tech_old = np.load("tech_old.npy")
 
 
 def env_func(**kwargs):
-    return StockTradingEnv(stocks, tech, **kwargs)
+    return StockTradingEnv(stocks_old, tech_old, **kwargs)
 
 
 env_name = "stock"
@@ -47,7 +47,7 @@ env_name = "stock"
 
 def train():
     env = SubprocVecEnv([env_func for _ in range(4)])
-    model = PPO("MlpPolicy", env, verbose=1)
+    model = PPO("MlpPolicy", env, verbose=1, learning_rate=1e-4)
     logger.info("Training model...")
 
     for _ in range(10):
@@ -55,7 +55,7 @@ def train():
         model.save(env_name)
         logger.info("Evaluating model...")
 
-        env = StockTradingEnv(stocks, tech)
+        env = StockTradingEnv(stocks_old, tech_old)
         mean_reward, std_reward = evaluate_policy(
             model,
             env,
@@ -63,29 +63,18 @@ def train():
         )
         logger.info(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
 
-        env = StockTradingEnv(stocks, tech)
-        env = DummyVecEnv([lambda: env])  # type: ignore[list-item, return-value]
+        env = StockTradingEnv(stocks_new, tech_new)
         mean_reward, std_reward = evaluate_policy(
             model,
             env,
             n_eval_episodes=10,
         )
-        logger.info(
-            f"Mean reward (dummy VecEnv): {mean_reward:.2f} +/- {std_reward:.2f}"
-        )
-
-        env = StockTradingEnv(stocks_old, tech_old)
-        mean_reward, std_reward = evaluate_policy(
-            model,
-            env,
-            n_eval_episodes=10,
-        )
-        logger.info(f"Mean reward (old data): {mean_reward:.2f} +/- {std_reward:.2f}")
+        logger.info(f"Mean reward (validation): {mean_reward:.2f} +/- {std_reward:.2f}")
 
 
 def demo():
     # env = env_func()
-    env = StockTradingEnv(stocks, tech)
+    env = StockTradingEnv(stocks_new, tech_new)
     model = PPO.load(env_name)
     obs, _ = env.reset()
     env = DummyVecEnv([lambda: env])  # type: ignore[list-item, return-value]
@@ -105,7 +94,7 @@ def demo():
     )
     logger.info(f"Stochastic mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
 
-    env = StockTradingEnv(stocks, tech)
+    env = StockTradingEnv(stocks_new, tech_new)
     # env = DummyVecEnv([lambda: env])  # type: ignore[list-item, return-value]
     obs, _ = env.reset()
     cash_history = []

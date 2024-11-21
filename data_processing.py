@@ -490,5 +490,23 @@ def test_2():
     plot_data("data/latest.csv", "AAPL", ["rsi_14", "macd", "open"])
 
 
+def load_data():
+    # Get stocks from Dow Jones
+    tickers = pd.read_html("https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average")
+    tickers = tickers[2]["Symbol"].tolist()
+    print(tickers)
+    stocks, tech = get_data(
+        tickers,
+        "2020-01-01",
+        "2022-01-01",
+        "1D",
+        {"RSI": rsi_14, "MACD": macd},
+        ["rsi_14", "macd"],
+    )
+    np.save("stocks_new.npy", stocks)
+    np.save("tech_new.npy", tech)
+
+
 if __name__ == "__main__":
-    test_2()
+    # test_2()
+    load_data()
