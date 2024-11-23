@@ -10,12 +10,12 @@ import pandas as pd
 import torch as t
 from beartype import beartype as typed
 from beartype.typing import Callable, Iterable, Iterator
+from cem import Actor, fit_actor, HODL, MountainCarPolicy, StateAdapter
 from data_processing import get_data, macd, rsi_14
 from envs.stock_trading_env import ActionVec, StateVec, StockTradingEnv
 from gymnasium import Env
 from jaxtyping import Float, Int
 from loguru import logger
-from models import Actor, fit_actor, HODL, MountainCarPolicy, StateAdapter
 from numpy import ndarray as ND
 from torch import nn, Tensor as TT
 from torch.distributions import Distribution

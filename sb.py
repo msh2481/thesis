@@ -19,11 +19,11 @@ tech_test = np.load("tech_test.npy")
 
 
 def train_env(**kwargs):
-    return PredictableEnv.create(n_stocks=2, tech_per_stock=1, n_steps=1000)
+    return CashRatioEnv.create(n_stocks=2, tech_per_stock=1, n_steps=1000)
 
 
 def demo_env(**kwargs):
-    return PredictableEnv.create(n_stocks=2, tech_per_stock=1, n_steps=1000)
+    return CashRatioEnv.create(n_stocks=2, tech_per_stock=1, n_steps=1000)
 
 
 env_name = "predictable"
@@ -35,7 +35,7 @@ def train():
     logger.info("Training model...")
 
     for _ in range(10):
-        model.learn(total_timesteps=3 * 10**4)
+        model.learn(total_timesteps=10**4)
         model.save(env_name)
         logger.info("Evaluating model...")
 
@@ -95,7 +95,7 @@ def demo():
         cash_ratio = obs[0]
         p = obs[1 : n + 1]
         q = obs[n + 1 : 2 * n + 1]
-        wealth = env.log_total_asset(p)
+        wealth = env._get_log_total_asset(p)
         cash_history.append(cash_ratio)
         wealth_history.append(wealth)
         # if q_last is not None and (np.abs(q - q_last).sum() > 1e-9):

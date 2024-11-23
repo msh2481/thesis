@@ -194,21 +194,23 @@ def test_env_1():
         ],
         axis=1,
     )
-    initial_stocks = np.ones(prices.shape[1], dtype=np.long)
-    env = StockTradingEnv(prices, techs, initial_stocks=initial_stocks)
-    state = env.reset()
+    env = StockTradingEnv(prices, techs, initial_stocks=1)
+    state, _ = env.reset()
     for _ in range(10):
         action = np.zeros(env.action_dim)
-        _, reward, done, _ = env.step(action)
+        _, reward, terminated, truncated, _ = env.step(action)
+        done = terminated or truncated
         print(reward, done)
     action = -np.ones(env.action_dim)
-    _, reward, done, _ = env.step(action)
+    _, reward, terminated, truncated, _ = env.step(action)
+    done = terminated or truncated
     print("---")
     print(reward, done)
     print("---")
     for _ in range(5):
         action = np.zeros(env.action_dim)
-        _, reward, done, _ = env.step(action)
+        _, reward, terminated, truncated, _ = env.step(action)
+        done = terminated or truncated
         print(reward, done)
 
 
