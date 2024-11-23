@@ -494,17 +494,23 @@ def load_data():
     # Get stocks from Dow Jones
     tickers = pd.read_html("https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average")
     tickers = tickers[2]["Symbol"].tolist()
-    print(tickers)
-    stocks, tech = get_data(
-        tickers,
-        "2020-01-01",
-        "2022-01-01",
-        "1D",
-        {"RSI": rsi_14, "MACD": macd},
-        ["rsi_14", "macd"],
-    )
-    np.save("stocks_new.npy", stocks)
-    np.save("tech_new.npy", tech)
+    # tickers = ["AAPL", "GOOGL"]
+    splits = [
+        ("2009-01-01", "2020-01-01", "old"),
+        ("2020-01-01", "2022-01-01", "new"),
+        ("2022-01-01", "2024-01-01", "test"),
+    ]
+    for start_date, end_date, suffix in splits:
+        stocks, tech = get_data(
+            tickers,
+            start_date,
+            end_date,
+            "1D",
+            {"RSI": rsi_14, "MACD": macd},
+            ["rsi_14", "macd"],
+        )
+        np.save(f"stocks_{suffix}.npy", stocks)
+        np.save(f"tech_{suffix}.npy", tech)
 
 
 if __name__ == "__main__":

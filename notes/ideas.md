@@ -10,3 +10,10 @@
 - one indicator to rule them all. MLP-like штука, на входе свёртки с затухающими экспонентами и синусоидами (тоже экспоненты по сути, лол), дальше слои вида (a_0 x_0 + ... a_n x_n) / (1 + abs(b_0 x_0 + ... b_n x_n + c_0 abs(x_0) + ... + c_n abs(x_n) )).
 - optimal trading via dynamic programming, then learn it in supervised fashion
 - many elementary RL environments to benchmark various aspects (relevant to trading). e.g. there is basically no exploration problem in trading, it's almost supervised learning, so some problems that occur e.g. in Atari might be irrelevant.
+    - environment where agent just needs to always keep certain cash ratio
+    - environment where next price is given as one of the signals (and others are noise)
+    - environment where all signals are noise, but the price process is mean-reverting (e.g. MA(q))
+    - environment where all signals are noise, but the price process is trend-following (e.g. prefix sums of random walk, in log-space)
+    - environment where optimal action is encoded as XOR of k signals
+    - envrironment with noise signals where at t * i period i-th stock price grows by a lot (so that the optimal strategy, without knowing exactly which stock will grow, is to diversify,
+    and diversify in terms of money, not shares)
