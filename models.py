@@ -53,12 +53,12 @@ class MLPPolicy(SFTPolicy):
     def action_distribution(self, state) -> Distribution:
         cur = state[1]
         nxt = state[3]
-        diff = nxt - cur
-        cutoff = 1.0
+        diff = cur - nxt
+        cutoff = 0.1
         x = self.backbone(state)
         mu = self.mu_head(x)
         sigma = F.softplus(self.sigma_head(x))
-        eps = 1e-3
+        eps = 1.0
         if diff > cutoff:
             mu.data.fill_(eps)
             sigma.data.fill_(1e-9)

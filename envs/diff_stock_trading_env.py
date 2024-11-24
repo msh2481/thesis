@@ -130,16 +130,12 @@ class DiffStockTradingEnv(gym.Env):
         self.stocks = self.stocks + action_quantities
         self.cash = self.cash - (action_quantities * actual_prices).sum()
         new_cash = self.cash
-        logger.debug(
-            f"EXECUTE ({self.time}): {action_quantities.numpy()} | {price.numpy()} ({actual_prices.numpy()}) | {old_cash:.2f} -> {new_cash:.2f}"
-        )
 
     @typed
     def _get_penalty(self) -> TReward:
         cash_deficit = t.relu(-self.cash)
         stock_deficit = t.relu(-self.stocks)
         penalty = cash_deficit + stock_deficit.sum()
-        logger.warning(f"PENALTY ({self.time}): {penalty:.2f}")
         return penalty
 
     @typed
