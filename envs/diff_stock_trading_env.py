@@ -47,11 +47,8 @@ class DiffStockTradingEnv(gym.Env):
             if not isinstance(initial_stocks, int)
             else t.full((self.stock_dim,), initial_stocks)
         ).float()
-        stock_value = (self.price_array[0] * self.initial_stocks).sum()
-        if initial_capital is None:
-            r = initial_cash_ratio
-            assert 0 <= r < 1
-            self.initial_capital = stock_value * r / (1 - r)
+        self.initial_capital = initial_capital
+        self.initial_cash_ratio = initial_cash_ratio
 
         self.state_dim = 1 + 2 * self.stock_dim + self.tech_dim
         # Environment state variables
@@ -74,9 +71,15 @@ class DiffStockTradingEnv(gym.Env):
         super().reset(seed=seed)
         self.time = 0
         current_price = self.price_array[self.time]
-
         self.stocks = self.initial_stocks.clone()
-        self.cash = self.initial_capital
+        stock_value = (current_price * self.stocks).sum()
+        if self.initial_capital is None:
+            r = self.initial_cash_ratio
+            assert 0 <= r < 1
+            self.cash = stock_value * r / (1 - r)
+            assert abs(self.cash / (self.cash + stock_value) - r) < 1e-6
+        else:
+            self.cash = self.initial_capital
         self.last_log_total_asset = self._get_log_total_asset(current_price)
 
         return self._get_state(current_price), {}
@@ -94,15 +97,14 @@ class DiffStockTradingEnv(gym.Env):
     ) -> tuple[TStateVec, TReward, bool, bool, dict]:
         """Take an action in the environment."""
         self.time += 1
-        current_price = self.price_array[self.time]
+        price = self.price_array[self.time]
 
-        self._execute_actions(actions, current_price)
+        self._execute_actions(actions)
+        reward = self._get_reward(actions, price) - self._get_penalty()
+        self.last_log_total_asset = self._get_log_total_asset(price)
+        state = self._get_state(price)
 
-        state = self._get_state(current_price)
-        reward = self._get_reward(actions, current_price) - self._get_penalty()
-
-        self.last_log_total_asset = self._get_log_total_asset(current_price)
-        terminated = self.time == self.max_step
+        terminated = self.time > self.max_step
         truncated = False
 
         return state, reward, terminated, truncated, {}
@@ -116,21 +118,29 @@ class DiffStockTradingEnv(gym.Env):
         return t.maximum(self.cash + (self.stocks * current_price).sum(), t.tensor(1.0))
 
     @typed
-    def _execute_actions(self, actions: TActionVec, price: TPriceVec) -> None:
+    def _execute_actions(self, actions: TActionVec) -> None:
         """Execute buy and sell actions."""
         assert actions.shape == (self.action_dim,)
+        price = self.price_array[self.time]
         action_quantities = actions * self.max_stock
+        old_cash = self.cash
         actual_prices = price * (
             1 + (actions > 0) * self.buy_cost_pct - (actions < 0) * self.sell_cost_pct
         )
         self.stocks = self.stocks + action_quantities
         self.cash = self.cash - (action_quantities * actual_prices).sum()
+        new_cash = self.cash
+        logger.debug(
+            f"EXECUTE ({self.time}): {action_quantities.numpy()} | {price.numpy()} ({actual_prices.numpy()}) | {old_cash:.2f} -> {new_cash:.2f}"
+        )
 
     @typed
     def _get_penalty(self) -> TReward:
         cash_deficit = t.relu(-self.cash)
         stock_deficit = t.relu(-self.stocks)
-        return cash_deficit + stock_deficit.sum()
+        penalty = cash_deficit + stock_deficit.sum()
+        logger.warning(f"PENALTY ({self.time}): {penalty:.2f}")
+        return penalty
 
     @typed
     def _get_cash_ratio(self, price: TPriceVec) -> Float[TT, ""]:

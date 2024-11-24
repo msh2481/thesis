@@ -1,4 +1,5 @@
 import numpy as np
+import seaborn as sns
 import torch as t
 from beartype import beartype as typed
 from envs.diff_stock_trading_env import (
@@ -14,6 +15,9 @@ from envs.stock_trading_env import (
     StateVec,
     StockTradingEnv,
 )
+from matplotlib import pyplot as plt
+
+sns.set_theme(context="notebook", style="white")
 
 
 class CashRatioEnv(DiffStockTradingEnv):
@@ -35,18 +39,19 @@ class CashRatioEnv(DiffStockTradingEnv):
     ) -> tuple[TStateVec, TReward, bool, bool, dict]:
         """Take an action in the environment."""
         self.time += 1
-        current_price = self.price_array[self.time]
+        price = self.price_array[self.time]
 
-        old_ratio = self._get_cash_ratio(current_price)
-        self._execute_actions(actions, current_price)
-        new_ratio = self._get_cash_ratio(current_price)
-
-        state = self._get_state(current_price)
+        old_ratio = self._get_cash_ratio(price)
+        self._execute_actions(actions)
+        new_ratio = self._get_cash_ratio(price)
         old_new = t.abs(old_ratio - new_ratio)
         old_dev = t.abs(0.5 - old_ratio)
         new_dev = t.abs(0.5 - new_ratio)
         reward = old_new**2 - (old_dev**2 + new_dev**2)
-        self.last_log_total_asset = self._get_log_total_asset(current_price)
+        self.last_log_total_asset = self._get_log_total_asset(price)
+
+        state = self._get_state(price)
+
         terminated = self.time == self.max_step
         truncated = False
 
@@ -62,7 +67,9 @@ class PredictableEnv(DiffStockTradingEnv):
     @typed
     def build_arrays(cls, n_steps: int, n_stocks: int, tech_per_stock: int):
         n_tech = n_stocks * tech_per_stock
-        price_array = t.randn((n_steps, n_stocks))
+        price_array = t.tensor(
+            [[1 if i % 2 == 0 else -1 for j in range(n_stocks)] for i in range(n_steps)]
+        )
         price_array = t.exp(price_array)
         tech_array = t.randn((n_steps, n_tech))
         for i in range(n_stocks):
@@ -100,5 +107,59 @@ class PredictableEnv(DiffStockTradingEnv):
         return super().reset_t(seed)
 
 
+def test_ground_truth():
+    env = PredictableEnv.create(1, 1, 100)
+    state, _ = env.reset()
+    cashes = []
+    actions = []
+    prices = []
+    stocks = []
+    techs = []
+    rewards = []
+    for _ in range(10):
+        cash_ratio, price, stock, tech = state
+        cash = env.cash
+        action = np.array([((price > tech).astype(np.float32) - stock / env.max_stock)])
+        state, reward, terminated, truncated, info = env.step(action)
+        cashes.append(cash)
+        actions.append(action)
+        prices.append(price)
+        stocks.append(stock)
+        techs.append(tech)
+        rewards.append(reward)
+        done = terminated or truncated
+        if done:
+            break
+
+    plt.figure(figsize=(10, 8))
+
+    plt.subplot(2, 3, 1)
+    plt.plot(cashes, "b-", label="Cash")
+    plt.legend()
+
+    plt.subplot(2, 3, 2)
+    plt.plot(prices, "r-", label="Price")
+    plt.plot(techs, "m-", label="Technical Signal")
+    plt.legend()
+
+    plt.subplot(2, 3, 3)
+    plt.plot(stocks, "g-", label="Stock Holdings")
+    plt.legend()
+
+    plt.subplot(2, 3, 4)
+    plt.plot(actions, "k-", label="Action")
+    plt.axhline(0, color="k", linestyle="--")
+    plt.legend()
+
+    plt.subplot(2, 3, 5)
+    plt.plot(rewards, "y-", label="Reward")
+    plt.plot(np.cumsum(rewards), "r-", label="Cumulative Reward")
+    plt.axhline(0, color="k", linestyle="--")
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
-    env = PredictableEnv.create(2, 1, 100)
+    test_ground_truth()
