@@ -65,24 +65,28 @@ class PredictableEnv(DiffStockTradingEnv):
     Environment where the next price is one of the signals.
     """
 
+    dt = 5
+
     @classmethod
     @typed
     def build_arrays(cls, n_steps: int, n_stocks: int, tech_per_stock: int):
         n_tech = n_stocks * tech_per_stock
-        price_array = t.tensor(
-            [[1 if i % 2 == 0 else -1 for j in range(n_stocks)] for i in range(n_steps)]
-        )
+        # price_array = t.tensor(
+        #     [[1 if i % 2 == 0 else -1 for j in range(n_stocks)] for i in range(n_steps)]
+        # )
+        price_array = t.randn((n_steps, n_stocks)) / n_steps**0.5
+        price_array = t.cumsum(price_array, dim=0)
         price_array = t.exp(price_array)
         tech_array = t.randn((n_steps, n_tech))
         for i in range(n_stocks):
-            tech_array[:, i * tech_per_stock] = t.roll(price_array[:, i], -1)
+            tech_array[:, i * tech_per_stock] = t.roll(price_array[:, i], -cls.dt)
 
         # check that the next price is one of the signals
-        for tt in range(n_steps - 1):
+        for tt in range(n_steps - cls.dt):
             for i in range(n_stocks):
                 assert (
                     t.abs(
-                        price_array[tt + 1, i] - tech_array[tt, i * tech_per_stock]
+                        price_array[tt + cls.dt, i] - tech_array[tt, i * tech_per_stock]
                     ).item()
                     < 1e-6
                 )

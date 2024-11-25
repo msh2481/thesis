@@ -18,6 +18,11 @@ TActionVec: TypeAlias = Float[TT, "stock_dim"]
 TStateVec: TypeAlias = Float[TT, "state_dim"]
 
 
+@typed
+def soft_greater(x: Float[TT, ""], threshold: float) -> Float[TT, ""]:
+    return (threshold - x).relu().square()
+
+
 class DiffStockTradingEnv(gym.Env):
     """A stock trading environment for reinforcement learning."""
 
@@ -50,7 +55,7 @@ class DiffStockTradingEnv(gym.Env):
         self.initial_capital = initial_capital
         self.initial_cash_ratio = initial_cash_ratio
 
-        self.state_dim = 1 + 2 * self.stock_dim + self.tech_dim
+        self.state_dim = 2 + 2 * self.stock_dim + self.tech_dim
         # Environment state variables
         self.reset()
 
@@ -115,7 +120,9 @@ class DiffStockTradingEnv(gym.Env):
 
     @typed
     def _get_total_asset(self, current_price: TPriceVec) -> TMoney:
-        return t.maximum(self.cash + (self.stocks * current_price).sum(), t.tensor(1.0))
+        return t.maximum(
+            self.cash + (self.stocks * current_price).sum(), t.tensor(1e-100)
+        )
 
     @typed
     def _execute_actions(self, actions: TActionVec) -> None:
@@ -131,9 +138,8 @@ class DiffStockTradingEnv(gym.Env):
 
     @typed
     def _get_penalty(self) -> TReward:
-        cash_deficit = t.relu(-self.cash)
-        stock_deficit = t.relu(-self.stocks)
-        penalty = cash_deficit + stock_deficit.sum()
+        cash_ratio = self._get_cash_ratio(self.price_array[self.time])
+        penalty = soft_greater(cash_ratio, 0.2) + soft_greater(1 - cash_ratio, 0.2)
         return penalty
 
     @typed
@@ -151,6 +157,7 @@ class DiffStockTradingEnv(gym.Env):
                 price,
                 self.stocks,
                 self.tech_array[self.time],
+                self.cash.reshape(1),
             ]
         )
         # to detach or not to detach?

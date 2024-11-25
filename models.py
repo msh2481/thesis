@@ -41,33 +41,32 @@ class TruePolicy(SFTPolicy):
 
     @typed
     def action_distribution(self, state) -> Distribution:
+        cash_ratio = state[0]
         cur = state[1]
+        stock = state[2]
         nxt = state[3]
-        diff = cur - nxt
-        cutoff = 0.1
+        cash = state[4]
         mu = t.zeros(self.output_dim)
         sigma = t.zeros(self.output_dim)
-        eps = 1.0
-        if diff > cutoff:
-            mu.data.fill_(eps)
-            sigma.data.fill_(1e-9)
-        elif diff < -cutoff:
-            mu.data.fill_(-eps)
-            sigma.data.fill_(1e-9)
+        if nxt > cur:
+            mu.data.fill_(0.5 * cash / cur / 100)
         else:
-            mu.data.fill_(0.0)
-            sigma.data.fill_(1e-9)
+            mu.data.fill_(-0.5 * stock / 100)
+        sigma.data.fill_(1e-9)
         return t.distributions.Normal(mu, sigma)
 
 
 class MLPPolicy(SFTPolicy):
-    def __init__(self, input_dim: int, output_dim: int, dims: list[int] = [128, 128]):
+    def __init__(
+        self, input_dim: int, output_dim: int, dims: list[int] = [256, 256, 32]
+    ):
         super().__init__()
         layers = []
         last_dim = input_dim
         for dim in dims:
             layers.append(nn.Linear(last_dim, dim))
             layers.append(nn.ReLU())
+            layers.append(nn.LayerNorm(dim))
             last_dim = dim
         self.backbone = nn.Sequential(*layers)
         for layer in layers:
@@ -131,21 +130,25 @@ def rollout(
     policy: SFTPolicy,
     env: DiffStockTradingEnv,
     deterministic: bool = False,
+    burn_in: int = 10,
 ) -> Float[TT, ""]:
     state, _ = env.reset_t()
-    rewards = []
+    zero_with_gradients = policy.predict(state).sum() * 0
+    rewards = [zero_with_gradients]
     total_reward = 0
     total_penalty = 0
-    for _ in range(env.max_step):
+    for step in range(env.max_step):
         action = policy.predict(state, deterministic=deterministic)
         state, reward, terminated, truncated, _ = env.step_t(action)
         penalty = env._get_penalty()
         total_reward += reward.item()
         total_penalty += penalty.item()
-        rewards.append(reward)
-        if penalty > 0:
-            logger.warning(f"Penalty: {penalty.item()}")
-        if terminated or truncated or total_penalty > max(total_reward, 0):
+        if step > burn_in:
+            rewards.append(reward)
+        if terminated or truncated:
+            break
+        if total_penalty > max(total_reward, 0.1):
+            # logger.warning(f"Penalty: {total_penalty}")
             break
     episode_return = sum(rewards)
     return episode_return
@@ -153,24 +156,36 @@ def rollout(
 
 @typed
 def imitation_rollout(
-    policy: SFTPolicy, env: DiffStockTradingEnv, deterministic: bool = False
+    policy: SFTPolicy,
+    env: DiffStockTradingEnv,
+    deterministic: bool = False,
+    use_env: bool = False,
 ) -> Float[TT, ""]:
-    state, _ = env.reset_t()
-    rewards = []
     true_policy = TruePolicy(env.state_dim, env.action_dim)
-    for _ in range(env.max_step):
-        action = policy.predict(state, deterministic=deterministic)
-        true_action = true_policy.predict(state, deterministic=deterministic)
-        state, reward, terminated, truncated, _ = env.step_t(true_action)
-        loss = (action - true_action).square().sum()
-        # logger.debug(
-        #     f"action: {action.item():.2f}, true_action: {true_action.item():.2f}, loss: {loss.item():.2f}"
-        # )
-        rewards.append(-loss)
-        if terminated or truncated:
-            break
-    episode_return = sum(rewards)
-    return episode_return
+    rewards = []
+    if use_env:
+        for _ in range(env.max_step):
+            action = policy.predict(state, deterministic=deterministic)
+            true_action = true_policy.predict(state, deterministic=deterministic)
+            state, reward, terminated, truncated, _ = env.step_t(true_action)
+            loss = (action - true_action).square().sum()
+            # logger.debug(
+            #     f"action: {action.item():.2f}, true_action: {true_action.item():.2f}, loss: {loss.item():.2f}"
+            # )
+            rewards.append(-loss)
+            if terminated or truncated:
+                break
+        episode_return = sum(rewards) / len(rewards)
+        return episode_return
+    else:
+        state = t.randn(env.state_dim)
+        for _ in range(1000):
+            action = policy.predict(state, deterministic=deterministic)
+            true_action = true_policy.predict(state, deterministic=deterministic)
+            loss = (action - true_action).square().sum()
+            rewards.append(-loss)
+        episode_return = sum(rewards) / len(rewards)
+        return episode_return
 
 
 def fit_mlp_policy(
@@ -189,6 +204,9 @@ def fit_mlp_policy(
     pbar = tqdm(range(n_epochs))
     returns = []
     return_stds = []
+    returns_ema = []
+    current_ema = 0.0
+    alpha = 0.95
     gradients = []
 
     for it in pbar:
@@ -199,7 +217,11 @@ def fit_mlp_policy(
         mean_return = sum(episode_returns) / batch_size
         return_tensors = t.tensor(episode_returns)
         std_return = return_tensors.detach().std()
-        pbar.set_postfix(mean_return=mean_return.item(), std_return=std_return.item())
+        pbar.set_postfix(
+            mean=mean_return.item(),
+            std=std_return.item(),
+            ema=current_ema,
+        )
 
         opt.zero_grad()
         (-mean_return).backward()
@@ -217,6 +239,8 @@ def fit_mlp_policy(
         scheduler.step()
 
         returns.append(mean_return.item())
+        current_ema = alpha * current_ema + (1 - alpha) * mean_return.item()
+        returns_ema.append(current_ema)
         return_stds.append(std_return.item())
         gradients.append(max_gradient)
 
@@ -227,7 +251,9 @@ def fit_mlp_policy(
             plt.subplot(2, 1, 1)
             plt.axhline(0, color="k", linestyle="--")
             plt.fill_between(range(len(returns)), l, r, alpha=0.2)
-            plt.plot(returns)
+            plt.plot(returns, "r", label="returns")
+            plt.plot(returns_ema, "b--", label="EMA")
+            plt.legend()
             plt.ylim(-1, 4)
 
             plt.subplot(2, 1, 2)
@@ -293,5 +319,13 @@ def test_gradients():
     plt.close()
 
 
+def test_penalty():
+    env = PredictableEnv.create(1, 1, 100)
+    state, _ = env.reset_t()
+    action = t.tensor([-1.5])
+    state, reward, terminated, truncated, _ = env.step_t(action)
+    print(env._get_penalty().item())
+
+
 if __name__ == "__main__":
-    test_gradients()
+    test_penalty()
