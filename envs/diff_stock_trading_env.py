@@ -55,7 +55,7 @@ class DiffStockTradingEnv(gym.Env):
         self.initial_capital = initial_capital
         self.initial_cash_ratio = initial_cash_ratio
 
-        self.state_dim = 2 + 2 * self.stock_dim + self.tech_dim
+        self.state_dim = 2 + 3 * self.stock_dim + self.tech_dim
         # Environment state variables
         self.reset()
 
@@ -155,9 +155,10 @@ class DiffStockTradingEnv(gym.Env):
             [
                 cash_ratio,
                 price,
-                self.stocks,
+                self.stocks / self.max_stock,
                 self.tech_array[self.time],
-                self.cash.reshape(1),
+                self.cash.reshape(1) / self.max_stock,
+                self.cash.reshape(1) / price,
             ]
         )
         # to detach or not to detach?

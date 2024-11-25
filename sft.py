@@ -25,7 +25,7 @@ def train():
         env,
         n_epochs=1000,
         batch_size=4,
-        lr=1e-4,
+        lr=1e-2,
         rollout_fn=imitation_rollout,
         # init_from="checkpoints/good.pth",
     )

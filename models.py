@@ -46,19 +46,20 @@ class TruePolicy(SFTPolicy):
         stock = state[2]
         nxt = state[3]
         cash = state[4]
+        cash_div_cur = state[5]
         mu = t.zeros(self.output_dim)
         sigma = t.zeros(self.output_dim)
         if nxt > cur:
-            mu.data.fill_(0.5 * cash / cur / 100)
+            mu.data.fill_(0.5 * cash_div_cur)
         else:
-            mu.data.fill_(-0.5 * stock / 100)
+            mu.data.fill_(-0.5 * stock)
         sigma.data.fill_(1e-9)
         return t.distributions.Normal(mu, sigma)
 
 
 class MLPPolicy(SFTPolicy):
     def __init__(
-        self, input_dim: int, output_dim: int, dims: list[int] = [256, 256, 32]
+        self, input_dim: int, output_dim: int, dims: list[int] = [256, 128, 64, 32, 16]
     ):
         super().__init__()
         layers = []
@@ -178,8 +179,8 @@ def imitation_rollout(
         episode_return = sum(rewards) / len(rewards)
         return episode_return
     else:
-        state = t.randn(env.state_dim)
-        for _ in range(1000):
+        for _ in range(50):
+            state = t.randn(env.state_dim).exp()
             action = policy.predict(state, deterministic=deterministic)
             true_action = true_policy.predict(state, deterministic=deterministic)
             loss = (action - true_action).square().sum()
@@ -199,7 +200,7 @@ def fit_mlp_policy(
     policy = MLPPolicy(env.state_dim, env.action_dim)
     if init_from is not None:
         policy.load_state_dict(t.load(init_from, weights_only=False))
-    opt = t.optim.SGD(policy.parameters(), lr=lr, momentum=0.8)
+    opt = t.optim.Adam(policy.parameters(), lr=lr)
     scheduler = t.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=0.95)
     pbar = tqdm(range(n_epochs))
     returns = []
@@ -254,7 +255,9 @@ def fit_mlp_policy(
             plt.plot(returns, "r", label="returns")
             plt.plot(returns_ema, "b--", label="EMA")
             plt.legend()
-            plt.ylim(-1, 4)
+            returns_95 = t.quantile(t.tensor(returns), 0.95)
+            returns_5 = t.quantile(t.tensor(returns), 0.05)
+            plt.ylim(returns_5 - 0.1, returns_95 + 0.1)
 
             plt.subplot(2, 1, 2)
             plt.plot(gradients)
