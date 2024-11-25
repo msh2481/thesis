@@ -134,11 +134,18 @@ def rollout(
 ) -> Float[TT, ""]:
     state, _ = env.reset_t()
     rewards = []
+    total_reward = 0
+    total_penalty = 0
     for _ in range(env.max_step):
         action = policy.predict(state, deterministic=deterministic)
         state, reward, terminated, truncated, _ = env.step_t(action)
+        penalty = env._get_penalty()
+        total_reward += reward.item()
+        total_penalty += penalty.item()
         rewards.append(reward)
-        if terminated or truncated:
+        if penalty > 0:
+            logger.warning(f"Penalty: {penalty.item()}")
+        if terminated or truncated or total_penalty > max(total_reward, 0):
             break
     episode_return = sum(rewards)
     return episode_return
@@ -178,6 +185,7 @@ def fit_mlp_policy(
     if init_from is not None:
         policy.load_state_dict(t.load(init_from, weights_only=False))
     opt = t.optim.SGD(policy.parameters(), lr=lr, momentum=0.8)
+    scheduler = t.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=0.95)
     pbar = tqdm(range(n_epochs))
     returns = []
     return_stds = []
@@ -206,6 +214,7 @@ def fit_mlp_policy(
                     p.grad.div_(max_gradient)
 
         opt.step()
+        scheduler.step()
 
         returns.append(mean_return.item())
         return_stds.append(std_return.item())
@@ -219,7 +228,7 @@ def fit_mlp_policy(
             plt.axhline(0, color="k", linestyle="--")
             plt.fill_between(range(len(returns)), l, r, alpha=0.2)
             plt.plot(returns)
-            plt.ylim(-200, 0)
+            plt.ylim(-1, 4)
 
             plt.subplot(2, 1, 2)
             plt.plot(gradients)

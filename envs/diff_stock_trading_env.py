@@ -154,7 +154,7 @@ class DiffStockTradingEnv(gym.Env):
             ]
         )
         # to detach or not to detach?
-        state = state.detach()
+        # state = state.detach()
 
         assert state.shape == (self.state_dim,)
         return state
