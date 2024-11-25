@@ -8,3 +8,6 @@ logs/
 data/
 *.npy
 *.jpg
+*.pth
+checkpoints/
+

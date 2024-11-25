@@ -15,7 +15,9 @@ from envs.stock_trading_env import (
     StateVec,
     StockTradingEnv,
 )
+from jaxtyping import Float, Int
 from matplotlib import pyplot as plt
+from torch import Tensor as TT
 
 sns.set_theme(context="notebook", style="white")
 

@@ -104,7 +104,7 @@ class DiffStockTradingEnv(gym.Env):
         self.last_log_total_asset = self._get_log_total_asset(price)
         state = self._get_state(price)
 
-        terminated = self.time > self.max_step
+        terminated = self.time == self.max_step
         truncated = False
 
         return state, reward, terminated, truncated, {}
@@ -123,13 +123,11 @@ class DiffStockTradingEnv(gym.Env):
         assert actions.shape == (self.action_dim,)
         price = self.price_array[self.time]
         action_quantities = actions * self.max_stock
-        old_cash = self.cash
         actual_prices = price * (
             1 + (actions > 0) * self.buy_cost_pct - (actions < 0) * self.sell_cost_pct
         )
         self.stocks = self.stocks + action_quantities
         self.cash = self.cash - (action_quantities * actual_prices).sum()
-        new_cash = self.cash
 
     @typed
     def _get_penalty(self) -> TReward:
