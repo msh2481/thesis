@@ -19,11 +19,11 @@ tech_test = np.load("tech_test.npy")
 
 
 def train_env(**kwargs):
-    return CashRatioEnv.create(n_stocks=2, tech_per_stock=1, n_steps=1000)
+    return PredictableEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
 
 
 def demo_env(**kwargs):
-    return CashRatioEnv.create(n_stocks=2, tech_per_stock=1, n_steps=1000)
+    return PredictableEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
 
 
 env_name = "predictable"

@@ -20,7 +20,7 @@ TStateVec: TypeAlias = Float[TT, "state_dim"]
 
 @typed
 def soft_greater(x: Float[TT, ""], threshold: float) -> Float[TT, ""]:
-    return (threshold - x).relu().square()
+    return (threshold - x).relu().square().clip(0, 1e3)
 
 
 class DiffStockTradingEnv(gym.Env):
@@ -139,12 +139,12 @@ class DiffStockTradingEnv(gym.Env):
     @typed
     def _get_penalty(self) -> TReward:
         cash_ratio = self._get_cash_ratio(self.price_array[self.time])
-        penalty = soft_greater(cash_ratio, 0.2) + soft_greater(1 - cash_ratio, 0.2)
+        penalty = soft_greater(cash_ratio, 0.1) + soft_greater(1 - cash_ratio, 0.1)
         return penalty
 
     @typed
     def _get_cash_ratio(self, price: TPriceVec) -> Float[TT, ""]:
-        return self.cash / self._get_total_asset(price)
+        return t.clip(self.cash / self._get_total_asset(price), -1.0, 2.0)
 
     @typed
     def _get_state(self, price: TPriceVec) -> TStateVec:
@@ -158,9 +158,16 @@ class DiffStockTradingEnv(gym.Env):
                 self.stocks / self.max_stock,
                 self.tech_array[self.time],
                 self.cash.reshape(1) / self.max_stock,
-                self.cash.reshape(1) / price,
+                self.cash.reshape(1) / price / self.max_stock,
             ]
         )
+        max_abs = state.abs().max()
+
+        # MAX = 1e6
+        # if max_abs > MAX:
+        #     logger.warning(f"State max abs: {max_abs}")
+        #     state.clip_(-MAX, MAX)
+
         # to detach or not to detach?
         # state = state.detach()
 

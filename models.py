@@ -49,18 +49,16 @@ class TruePolicy(SFTPolicy):
         cash_div_cur = state[5]
         mu = t.zeros(self.output_dim)
         sigma = t.zeros(self.output_dim)
-        if nxt > cur:
-            mu.data.fill_(0.5 * cash_div_cur)
-        else:
-            mu.data.fill_(-0.5 * stock)
+        if nxt > cur and cash_ratio > 0.3:
+            mu.data.fill_(0.2 * cash_div_cur)
+        elif nxt < cur and cash_ratio < 0.7:
+            mu.data.fill_(-0.2 * stock)
         sigma.data.fill_(1e-9)
         return t.distributions.Normal(mu, sigma)
 
 
 class MLPPolicy(SFTPolicy):
-    def __init__(
-        self, input_dim: int, output_dim: int, dims: list[int] = [256, 128, 64, 32, 16]
-    ):
+    def __init__(self, input_dim: int, output_dim: int, dims: list[int] = [128, 128]):
         super().__init__()
         layers = []
         last_dim = input_dim
@@ -131,7 +129,6 @@ def rollout(
     policy: SFTPolicy,
     env: DiffStockTradingEnv,
     deterministic: bool = False,
-    burn_in: int = 10,
 ) -> Float[TT, ""]:
     state, _ = env.reset_t()
     zero_with_gradients = policy.predict(state).sum() * 0
@@ -144,8 +141,7 @@ def rollout(
         penalty = env._get_penalty()
         total_reward += reward.item()
         total_penalty += penalty.item()
-        if step > burn_in:
-            rewards.append(reward)
+        rewards.append(reward)
         if terminated or truncated:
             break
         if total_penalty > max(total_reward, 0.1):
@@ -160,11 +156,12 @@ def imitation_rollout(
     policy: SFTPolicy,
     env: DiffStockTradingEnv,
     deterministic: bool = False,
-    use_env: bool = False,
+    use_env: bool = True,
 ) -> Float[TT, ""]:
     true_policy = TruePolicy(env.state_dim, env.action_dim)
     rewards = []
     if use_env:
+        state, _ = env.reset_t()
         for _ in range(env.max_step):
             action = policy.predict(state, deterministic=deterministic)
             true_action = true_policy.predict(state, deterministic=deterministic)

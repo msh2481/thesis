@@ -24,9 +24,9 @@ def train():
     model = fit_mlp_policy(
         env,
         n_epochs=1000,
-        batch_size=4,
-        lr=1e-2,
-        rollout_fn=imitation_rollout,
+        batch_size=1,
+        lr=1e-3,
+        rollout_fn=rollout,
         # init_from="checkpoints/good.pth",
     )
 
@@ -49,7 +49,7 @@ def demo():
     rewards = []
 
     for _ in range(steps):
-        cash_ratio, price, stock, tech, cash = state
+        cash_ratio, price, stock, tech, cash, cash_div_price = state
         cash = env.cash
         action = policy.predict(state, deterministic=True)
         state, reward, terminated, truncated, info = env.step_t(action)
@@ -72,15 +72,18 @@ def demo():
 
     plt.subplot(2, 3, 1)
     plt.plot(cashes, "b-", label="Cash")
+    plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
     plt.subplot(2, 3, 2)
     plt.plot(prices, "r-", label="Price")
     plt.plot(techs, "m-", label="Technical Signal")
+    plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
     plt.subplot(2, 3, 3)
     plt.plot(stocks, "g-", label="Stock Holdings")
+    plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
     plt.subplot(2, 3, 4)
