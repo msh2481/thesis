@@ -1,4 +1,5 @@
 import numpy as np
+import numpy.random as rd
 import seaborn as sns
 import torch as t
 from beartype import beartype as typed
@@ -167,5 +168,29 @@ def test_ground_truth():
     plt.show()
 
 
+def generate_weird_tensor(n: int) -> Float[TT, "n"]:
+    values = [t.inf, -t.inf, t.nan, -t.nan, 0.0, 1e-1000, 1e-100, 1e-20, 1e20, 1e100]
+    return t.tensor(rd.choice(values, size=(n,)))
+
+
+def assert_good_tensor(tensor: Float[TT, "n"]):
+    assert not t.isnan(tensor).any()
+    assert not t.isinf(tensor).any()
+    assert t.isfinite(tensor).all()
+
+
+def test_corner_cases():
+    env = PredictableEnv.create(2, 2, 100)
+    state, _ = env.reset_t()
+    assert_good_tensor(state)
+    for _ in range(10):
+        action = generate_weird_tensor(env.action_dim)
+        state, reward, terminated, truncated, _ = env.step_t(action)
+        done = terminated or truncated
+        print(state, reward)
+        assert_good_tensor(state)
+        assert_good_tensor(reward)
+
+
 if __name__ == "__main__":
-    test_ground_truth()
+    test_corner_cases()

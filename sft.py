@@ -32,14 +32,14 @@ def train():
 
 
 def demo():
-    it = 180
+    it = 500
     steps = 80
 
     env = demo_env()
-    # policy = MLPPolicy(env.state_dim, env.action_dim)
-    # policy.load_state_dict(t.load(f"checkpoints/policy_{it}.pth", weights_only=False))
+    policy = MLPPolicy(env.state_dim, env.action_dim)
+    policy.load_state_dict(t.load(f"checkpoints/policy_{it}.pth", weights_only=False))
     # policy.load_state_dict(t.load(f"checkpoints/good.pth", weights_only=False))
-    policy = TruePolicy(env.state_dim, env.action_dim)
+    # policy = TruePolicy(env.state_dim, env.action_dim)
     state, _ = env.reset_t()
     cashes = []
     actions = []
@@ -118,6 +118,6 @@ def evaluate():
 
 
 if __name__ == "__main__":
-    train()
-    # demo()
+    # train()
+    demo()
     # evaluate()

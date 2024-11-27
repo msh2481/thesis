@@ -104,6 +104,9 @@ class DiffStockTradingEnv(gym.Env):
         self.time += 1
         price = self.price_array[self.time]
 
+        actions = t.where(t.isfinite(actions), actions, t.tensor(0.0))
+        actions.data.clamp_(-1, 1)
+
         self._execute_actions(actions)
         reward = self._get_reward(actions, price) - self._get_penalty()
         self.last_log_total_asset = self._get_log_total_asset(price)
@@ -221,7 +224,3 @@ def test_env_1():
         _, reward, terminated, truncated, _ = env.step(action)
         done = terminated or truncated
         print(reward, done)
-
-
-if __name__ == "__main__":
-    test_env_1()

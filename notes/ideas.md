@@ -17,3 +17,10 @@
     - environment where optimal action is encoded as XOR of k signals
     - envrironment with noise signals where at t * i period i-th stock price grows by a lot (so that the optimal strategy, without knowing exactly which stock will grow, is to diversify,
     and diversify in terms of money, not shares)
+- select the best practices for optimization
+    - Lookahead 
+    - Cautious optimizers 
+    - Weight averaging 
+    - Sphere GPT
+    - x-LSTM
+    - other stuff from the saved ones
