@@ -129,6 +129,6 @@ def evaluate():
 
 
 if __name__ == "__main__":
-    train()
-    # demo()
+    # train()
+    demo()
     # evaluate()
