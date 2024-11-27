@@ -114,6 +114,45 @@ class PredictableEnv(DiffStockTradingEnv):
         return super().reset_t(seed)
 
 
+class MovingAverageEnv(PredictableEnv):
+    """
+    Environment where the price process is MA(dt).
+    """
+
+    dt = 5
+
+    @classmethod
+    def build_arrays(cls, n_steps: int, n_stocks: int, tech_per_stock: int):
+        n_tech = n_stocks * tech_per_stock
+        noise = t.randn((n_steps + cls.dt, n_stocks))
+        price_array = t.zeros((n_steps, n_stocks))
+        tech_array = t.randn((n_steps, n_tech))
+        for i in range(n_steps):
+            price_array[i] = noise[i : i + cls.dt].mean(dim=0).exp()
+        return price_array, tech_array
+
+
+class TrendFollowingEnv(PredictableEnv):
+
+    @classmethod
+    def build_arrays(cls, n_steps: int, n_stocks: int, tech_per_stock: int):
+        n_tech = n_stocks * tech_per_stock
+        price_array = t.zeros((n_steps, n_stocks))
+        upward = t.rand((n_stocks,)) > 0.5
+        tech_array = t.randn((n_steps, n_tech))
+        new_price = t.ones((n_stocks,))
+        for i in range(n_steps):
+            deltas = t.randn(n_stocks).exp() / 100
+            sign = (2 * upward - 1).float()
+            new_price *= (sign * deltas).exp()
+            flip_prob = t.sigmoid(new_price.log() * sign - 3)
+            flip = t.rand((n_stocks,)) < flip_prob
+            upward = t.where(flip, ~upward, upward)
+            price_array[i] = new_price
+
+        return price_array, tech_array
+
+
 def test_ground_truth():
     env = PredictableEnv.create(1, 1, 100)
     state, _ = env.reset()

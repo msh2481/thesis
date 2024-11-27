@@ -2,7 +2,12 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 from data_processing import get_data, macd, rsi_14
-from envs.benchmark import CashRatioEnv, PredictableEnv
+from envs.benchmark import (
+    CashRatioEnv,
+    MovingAverageEnv,
+    PredictableEnv,
+    TrendFollowingEnv,
+)
 from envs.debug import DebugEnv
 from envs.stock_trading_env import StockTradingEnv
 from loguru import logger
@@ -19,11 +24,11 @@ tech_test = np.load("tech_test.npy")
 
 
 def train_env(**kwargs):
-    return PredictableEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return MovingAverageEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
 
 
 def demo_env(**kwargs):
-    return PredictableEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return MovingAverageEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
 
 
 env_name = "predictable"
@@ -31,7 +36,7 @@ env_name = "predictable"
 
 def train():
     env = SubprocVecEnv([train_env for _ in range(4)])
-    model = PPO("MlpPolicy", env, verbose=1, learning_rate=1e-4)
+    model = PPO("MlpPolicy", env, verbose=1, learning_rate=1e-3)
     logger.info("Training model...")
 
     for _ in range(10):

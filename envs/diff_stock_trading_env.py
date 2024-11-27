@@ -20,7 +20,7 @@ TStateVec: TypeAlias = Float[TT, "state_dim"]
 
 @typed
 def soft_greater(x: Float[TT, ""], threshold: float) -> Float[TT, ""]:
-    return (threshold - x).relu().square().clip(0, 1e3)
+    return (threshold - x).relu().square()
 
 
 class DiffStockTradingEnv(gym.Env):
@@ -108,12 +108,13 @@ class DiffStockTradingEnv(gym.Env):
         actions.data.clamp_(-1, 1)
 
         self._execute_actions(actions)
-        reward = self._get_reward(actions, price) - self._get_penalty()
+        penalty = self._get_penalty()
+        reward = self._get_reward(actions, price) - penalty
         self.last_log_total_asset = self._get_log_total_asset(price)
         state = self._get_state(price)
 
         terminated = self.time == self.max_step
-        truncated = False
+        truncated = (penalty > 1).item()
 
         return state, reward, terminated, truncated, {}
 

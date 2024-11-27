@@ -2,18 +2,23 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 import torch as t
-from envs.benchmark import CashRatioEnv, PredictableEnv
+from envs.benchmark import (
+    CashRatioEnv,
+    MovingAverageEnv,
+    PredictableEnv,
+    TrendFollowingEnv,
+)
 from loguru import logger
 from models import fit_mlp_policy, imitation_rollout, MLPPolicy, rollout, TruePolicy
 from tqdm import tqdm
 
 
 def train_env(**kwargs):
-    return PredictableEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
 
 
 def demo_env(**kwargs):
-    return PredictableEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
 
 
 env_name = "predictable"
@@ -25,14 +30,14 @@ def train():
         env,
         n_epochs=1000,
         batch_size=1,
-        lr=1e-3,
+        lr=1e-4,
         rollout_fn=rollout,
         # init_from="checkpoints/good.pth",
     )
 
 
 def demo():
-    it = 500
+    it = 400
     steps = 80
 
     env = demo_env()
@@ -94,6 +99,12 @@ def demo():
     plt.subplot(2, 3, 5)
     plt.plot(rewards, "y-", label="Reward")
     plt.plot(np.cumsum(rewards), "r-", label="Cumulative Reward")
+    plt.axhline(0, color="k", linestyle="--")
+    plt.legend()
+
+    plt.subplot(2, 3, 6)
+    plt.plot(prices, "r-", label="Price")
+    plt.plot(actions, "m-", label="Action")
     plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
