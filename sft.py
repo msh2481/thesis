@@ -30,7 +30,7 @@ def train():
         env,
         n_epochs=1000,
         batch_size=1,
-        lr=1e-4,
+        lr=1e-3,
         rollout_fn=rollout,
         # init_from="checkpoints/good.pth",
     )

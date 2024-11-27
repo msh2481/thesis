@@ -141,6 +141,8 @@ class TrendFollowingEnv(PredictableEnv):
         upward = t.rand((n_stocks,)) > 0.5
         tech_array = t.randn((n_steps, n_tech))
         new_price = t.ones((n_stocks,))
+        ema_period = 5
+        ema_price = t.ones((n_stocks,))
         for i in range(n_steps):
             deltas = t.randn(n_stocks).exp() / 100
             sign = (2 * upward - 1).float()
@@ -148,7 +150,9 @@ class TrendFollowingEnv(PredictableEnv):
             flip_prob = t.sigmoid(new_price.log() * sign - 3)
             flip = t.rand((n_stocks,)) < flip_prob
             upward = t.where(flip, ~upward, upward)
+            ema_price = ema_price * (1 - 1 / ema_period) + new_price / ema_period
             price_array[i] = new_price
+            tech_array[i, ::tech_per_stock] = ema_price
 
         return price_array, tech_array
 
