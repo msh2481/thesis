@@ -82,24 +82,28 @@ class MLPPolicy(SFTPolicy):
 
     @typed
     def action_distribution(self, state) -> Distribution:
-        # cur = state[1]
-        # nxt = state[3]
-        # diff = cur - nxt
-        # cutoff = 0.1
-        x = self.backbone(state)
-        mu = self.mu_head(x)
-        sigma = F.softplus(self.sigma_head(x)) + 1e-9
-        # eps = 1.0
-        # if diff > cutoff:
-        #     mu.data.fill_(eps)
-        #     sigma.data.fill_(1e-9)
-        # elif diff < -cutoff:
-        #     mu.data.fill_(-eps)
-        #     sigma.data.fill_(1e-9)
-        # else:
-        #     mu.data.fill_(0.0)
-        #     sigma.data.fill_(1e-9)
-        return t.distributions.Normal(mu, sigma)
+        with t.no_grad():
+            for p in self.parameters():
+                if t.isnan(p.data).any():
+                    logger.warning(f"NaN detected in parameter: {p}")
+                    p.data = t.where(t.isnan(p.data), t.zeros_like(p.data), p.data)
+                p.data.clamp_(-10, 10)
+
+        try:
+            x = self.backbone(state)
+            mu = self.mu_head(x)
+            sigma = F.softplus(self.sigma_head(x)) + 1e-9
+            return t.distributions.Normal(mu, sigma)
+        except ValueError as e:
+            x = state
+            logger.warning(f"x: {x.norm()}")
+            for layer in self.backbone:
+                x = layer(x)
+                logger.warning(f"Layer: {type(layer)} x: {x.norm()}")
+            logger.warning(f"State: {state}")
+            logger.warning(f"mu: {mu}")
+            logger.warning(f"sigma: {sigma}")
+            raise e
 
 
 def test_gradients():
@@ -224,14 +228,27 @@ def fit_mlp_policy(
         opt.zero_grad()
         (-mean_return).backward()
         # Compute l2 norm across all parameters
-        max_gradient = t.sqrt(
-            sum(p.grad.flatten().norm().square() for p in policy.parameters())
-        )
+        sum_of_squares = t.tensor(1.0)
+        count = 1.0
+        for p in policy.parameters():
+            g = p.grad
+            if g is None:
+                continue
+            if not g.isfinite().all():
+                logger.warning(f"Gradient is NaN: {g}")
+                p.grad = t.zeros_like(p.grad)
+                g = p.grad
+            sum_of_squares += g.flatten().square().sum()
+            count += g.numel()
+        normalization_constant = t.sqrt(sum_of_squares / count)
+        assert (
+            normalization_constant.isfinite()
+        ), "Gradient normalization constant is NaN"
         # Normalize each parameter's gradients by dividing by total norm
-        if max_gradient > 0:
+        if normalization_constant > 0:
             for p in policy.parameters():
                 if p.grad is not None:
-                    p.grad.div_(max_gradient)
+                    p.grad.div_(normalization_constant)
 
         opt.step()
         scheduler.step()
@@ -240,7 +257,7 @@ def fit_mlp_policy(
         current_ema = alpha * current_ema + (1 - alpha) * mean_return.item()
         returns_ema.append(current_ema)
         return_stds.append(std_return.item())
-        gradients.append(max_gradient)
+        gradients.append(normalization_constant.item())
 
         if it % 10 == 0:
             l = t.tensor(returns) - t.tensor(return_stds)

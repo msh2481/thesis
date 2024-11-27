@@ -148,7 +148,12 @@ class DiffStockTradingEnv(gym.Env):
 
     @typed
     def _get_cash_ratio(self, price: TPriceVec) -> Float[TT, ""]:
-        return t.clip(self.cash / self._get_total_asset(price), -1.0, 2.0)
+        raw = self.cash / self._get_total_asset(price)
+        clipped = t.clip(raw, -1.0, 2.0)
+        if not clipped.isfinite().all():
+            logger.warning(f"Cash ratio is NaN: {raw}")
+            return t.zeros_like(raw)
+        return clipped
 
     @typed
     def _get_state(self, price: TPriceVec) -> TStateVec:
@@ -167,10 +172,13 @@ class DiffStockTradingEnv(gym.Env):
         )
         max_abs = state.abs().max()
 
-        # MAX = 1e6
-        # if max_abs > MAX:
-        #     logger.warning(f"State max abs: {max_abs}")
-        #     state.clip_(-MAX, MAX)
+        MAX = 1e6
+        if max_abs > MAX:
+            logger.warning(f"State max abs: {max_abs}")
+            state.clip_(-MAX, MAX)
+        all_good = (state.abs() < MAX).all() and state.isfinite().all()
+        if not all_good:
+            logger.warning(f"State is bad: {state}")
 
         # to detach or not to detach?
         # state = state.detach()

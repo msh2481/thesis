@@ -14,11 +14,11 @@ from tqdm import tqdm
 
 
 def train_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return TrendFollowingEnv.create(n_stocks=5, tech_per_stock=1, n_steps=200)
 
 
 def demo_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return TrendFollowingEnv.create(n_stocks=5, tech_per_stock=1, n_steps=200)
 
 
 env_name = "predictable"
@@ -129,6 +129,6 @@ def evaluate():
 
 
 if __name__ == "__main__":
-    # train()
-    demo()
+    train()
+    # demo()
     # evaluate()
