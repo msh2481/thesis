@@ -269,6 +269,7 @@ def fit_mlp_policy(
     init_from: str | None = None,
     polyak_average: bool = False,
     eval_interval: int = 5,
+    max_weight: float = 10.0,
 ):
     # Get dimensions once from a temporary environment
     tmp_env = env_factory()
@@ -307,7 +308,7 @@ def fit_mlp_policy(
             episode_return = rollout_fn(policy, env)
             episode_returns.append(episode_return)
 
-        mean_return = sum(episode_returns) / batch_size
+        mean_return = (sum(episode_returns) / batch_size).clamp(-100, None)
         return_tensors = t.tensor(episode_returns)
         std_return = (
             return_tensors.detach().std() if len(return_tensors) > 1 else t.tensor(0.0)
@@ -364,6 +365,9 @@ def fit_mlp_policy(
         opt.step()
         scheduler.step()
 
+        for p in policy.parameters():
+            p.data.clamp_(-max_weight, max_weight)
+
         # Update average state dict
         if polyak_average:
             with t.no_grad():
@@ -387,7 +391,7 @@ def fit_mlp_policy(
             for _ in range(batch_size):
                 avg_return = rollout_fn(avg_policy, env)
                 avg_episode_returns.append(avg_return)
-            avg_mean_return = sum(avg_episode_returns) / batch_size
+            avg_mean_return = (sum(avg_episode_returns) / batch_size).clamp(-100, None)
             last_avg_return = avg_mean_return.item()
             avg_returns.append(last_avg_return)
             for _ in range(eval_interval):

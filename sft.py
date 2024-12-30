@@ -14,11 +14,11 @@ from tqdm import tqdm
 
 
 def train_env(**kwargs):
-    return CashRatioEnv.create(n_stocks=1, tech_per_stock=1, n_steps=1000)
+    return TrendFollowingEnv.create(n_stocks=3, tech_per_stock=1, n_steps=1000)
 
 
 def demo_env(**kwargs):
-    return CashRatioEnv.create(n_stocks=1, tech_per_stock=1, n_steps=3000)
+    return TrendFollowingEnv.create(n_stocks=3, tech_per_stock=1, n_steps=200)
 
 
 env_name = "predictable"
@@ -29,7 +29,7 @@ def train():
         env_factory=train_env,
         n_epochs=1000,
         batch_size=1,
-        lr=3e-4,
+        lr=3e-5,
         rollout_fn=rollout,
         polyak_average=True,
         # init_from="checkpoints/good.pth",
@@ -37,9 +37,8 @@ def train():
 
 
 def demo(it: int):
-    steps = 3000
-
     env = demo_env()
+    steps = env.n_steps
     policy = MLPPolicy(env.state_dim, env.action_dim)
     policy.load_state_dict(
         t.load(f"checkpoints/avg_policy_{it}.pth", weights_only=False)
