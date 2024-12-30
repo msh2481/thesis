@@ -24,11 +24,11 @@ tech_test = np.load("tech_test.npy")
 
 
 def train_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return StockTradingEnv(stocks_old, tech_old)
 
 
 def demo_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return StockTradingEnv(stocks_new, tech_new)
 
 
 env_name = "predictable"

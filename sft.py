@@ -8,17 +8,25 @@ from envs.benchmark import (
     PredictableEnv,
     TrendFollowingEnv,
 )
+from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
 from models import fit_mlp_policy, imitation_rollout, MLPPolicy, rollout, TruePolicy
 from tqdm import tqdm
 
+stocks_new = t.tensor(np.load("stocks_new.npy"), dtype=t.float32)
+tech_new = t.tensor(np.load("tech_new.npy"), dtype=t.float32)
+stocks_old = t.tensor(np.load("stocks_old.npy"), dtype=t.float32)
+tech_old = t.tensor(np.load("tech_old.npy"), dtype=t.float32)
+stocks_test = t.tensor(np.load("stocks_test.npy"), dtype=t.float32)
+tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
+
 
 def train_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=3, tech_per_stock=1, n_steps=1000)
+    return DiffStockTradingEnv(stocks_old, tech_old)
 
 
 def demo_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=3, tech_per_stock=1, n_steps=200)
+    return DiffStockTradingEnv(stocks_new, tech_new)
 
 
 env_name = "predictable"
@@ -36,13 +44,19 @@ def train():
     )
 
 
-def demo(it: int):
+def demo(it: int, avg: bool):
     env = demo_env()
-    steps = env.n_steps
+    # steps = env.n_steps
+    steps = env.max_step
     policy = MLPPolicy(env.state_dim, env.action_dim)
-    policy.load_state_dict(
-        t.load(f"checkpoints/avg_policy_{it}.pth", weights_only=False)
-    )
+    if avg:
+        policy.load_state_dict(
+            t.load(f"checkpoints/avg_policy_{it}.pth", weights_only=False)
+        )
+    else:
+        policy.load_state_dict(
+            t.load(f"checkpoints/policy_{it}.pth", weights_only=False)
+        )
     state, _ = env.reset_t()
 
     # Lists to store trajectory
@@ -196,9 +210,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--iter", type=int, default=100, help="Number of iterations to load for demo"
     )
+    parser.add_argument("--avg", action="store_true", help="Use Polyak-averaged policy")
     args = parser.parse_args()
 
     if args.mode == "train":
         train()
     elif args.mode == "demo":
-        demo(args.iter)
+        demo(args.iter, args.avg)
