@@ -43,8 +43,6 @@ def demo():
     env = demo_env()
     policy = MLPPolicy(env.state_dim, env.action_dim)
     policy.load_state_dict(t.load(f"checkpoints/policy_{it}.pth", weights_only=False))
-    # policy.load_state_dict(t.load(f"checkpoints/good.pth", weights_only=False))
-    # policy = TruePolicy(env.state_dim, env.action_dim)
     state, _ = env.reset_t()
     cashes = []
     actions = []
@@ -52,6 +50,8 @@ def demo():
     stocks = []
     techs = []
     rewards = []
+    portfolio_values = []
+    initial_cash = env.cash.item()
 
     for _ in range(steps):
         cash_ratio, price, stock, tech, cash, cash_div_price = state
@@ -68,10 +68,18 @@ def demo():
         stocks.append(stock.item())
         techs.append(tech.item())
         rewards.append(reward.item())
+        portfolio_values.append(cash.item() + stock.item() * price.item())
 
         done = terminated or truncated
         if done:
             break
+
+    # Calculate buy & hold returns
+    avg_stock = np.mean(stocks)
+    buy_hold_values = []
+    for price in prices:
+        value = initial_cash - avg_stock * prices[0] + avg_stock * price
+        buy_hold_values.append(value)
 
     plt.figure(figsize=(10, 8))
 
@@ -88,7 +96,8 @@ def demo():
 
     plt.subplot(2, 3, 3)
     plt.plot(stocks, "g-", label="Stock Holdings")
-    plt.axhline(0, color="k", linestyle="--")
+    plt.axhline(avg_stock, color="k", linestyle="--", label="Avg Holdings")
+    plt.axhline(0, color="k", linestyle=":")
     plt.legend()
 
     plt.subplot(2, 3, 4)
@@ -98,7 +107,10 @@ def demo():
 
     plt.subplot(2, 3, 5)
     plt.plot(rewards, "y-", label="Reward")
-    plt.plot(np.cumsum(rewards), "r-", label="Cumulative Reward")
+    plt.plot(np.cumsum(rewards), "r-", label="Strategy Cum. Reward")
+    strategy_value_change = np.array(portfolio_values) - portfolio_values[0]
+    buyhold_value_change = np.array(buy_hold_values) - buy_hold_values[0]
+    plt.plot(buyhold_value_change, "b--", label="Buy & Hold Cum. Return")
     plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 

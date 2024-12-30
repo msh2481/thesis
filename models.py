@@ -57,9 +57,70 @@ class TruePolicy(SFTPolicy):
         return t.distributions.Normal(mu, sigma)
 
 
+class PolyakNormalizer(nn.Module):
+    def __init__(self, n_features: int, burn_in: int = 5):
+        super().__init__()
+        self.register_buffer("mean", t.zeros(n_features))
+        self.register_buffer("M2", t.zeros(n_features))  # Second moment around mean
+        self.register_buffer("count", t.tensor(0.0))
+        self.burn_in = burn_in
+
+    @property
+    def std(self) -> TT:
+        return (
+            t.sqrt(self.M2 / (self.count - 1) + 1e-8)
+            if self.count > 1
+            else t.ones_like(self.mean)
+        )
+
+    @typed
+    def partial_fit(self, batch: Float[TT, "batch_size n_features"]) -> None:
+        # Drop samples with nan
+        initial_size = batch.size(0)
+        batch = batch[~t.isnan(batch).any(dim=1)]
+        new_size = batch.size(0)
+        if new_size < initial_size:
+            logger.warning(f"Dropped {initial_size - new_size} samples with NaN")
+        if not new_size:
+            return
+        assert not t.isnan(batch).any()
+
+        with t.no_grad():
+            batch_mean = batch.mean(dim=0)
+            batch_size = t.tensor(batch.size(0), dtype=t.float32)
+
+            # Compute batch M2
+            batch_M2 = (batch - batch_mean).square().sum(dim=0)
+
+            # Chan's parallel algorithm
+            combined_size = self.count + batch_size
+            delta = batch_mean - self.mean
+            self.mean = self.mean + delta * (batch_size / combined_size)
+            self.M2 = (
+                self.M2
+                + batch_M2
+                + delta * delta * (self.count * batch_size / combined_size)
+            )
+            self.count = combined_size
+
+    @typed
+    def transform(
+        self, batch: Float[TT, "batch_size n_features"]
+    ) -> Float[TT, "batch_size n_features"]:
+        return (batch - self.mean.unsqueeze(0)) / (self.std.unsqueeze(0))
+
+    @typed
+    def fit_transform(
+        self, batch: Float[TT, "batch_size n_features"]
+    ) -> Float[TT, "batch_size n_features"]:
+        self.partial_fit(batch)
+        return self.transform(batch)
+
+
 class MLPPolicy(SFTPolicy):
     def __init__(self, input_dim: int, output_dim: int, dims: list[int] = [128, 128]):
         super().__init__()
+        self.normalizer = PolyakNormalizer(input_dim)
         layers = []
         last_dim = input_dim
         for dim in dims:
@@ -90,7 +151,15 @@ class MLPPolicy(SFTPolicy):
                 p.data.clamp_(-10, 10)
 
         try:
-            x = self.backbone(state)
+            if self.training:
+                state_normalized = self.normalizer.fit_transform(
+                    state.unsqueeze(0)
+                ).squeeze(0)
+            else:
+                state_normalized = self.normalizer.transform(
+                    state.unsqueeze(0)
+                ).squeeze(0)
+            x = self.backbone(state_normalized)
             mu = self.mu_head(x)
             sigma = F.softplus(self.sigma_head(x)) + 1e-9
             return t.distributions.Normal(mu, sigma)
@@ -344,5 +413,53 @@ def test_penalty():
     print(env._get_penalty().item())
 
 
+def test_normalizer():
+    # Setup
+    n_features = 3
+    normalizer = PolyakNormalizer(n_features)
+
+    # Generate data from different normal distributions for each feature
+    means = t.tensor([1.0, -2.0, 5.0])
+    stds = t.tensor([0.5, 2.0, 3.0])
+    n_batches = 1000
+    batch_size = 5
+
+    # Training loop
+    pbar = tqdm(range(n_batches), desc="Training normalizer")
+    for _ in pbar:
+        # Generate batch from factorized normal
+        batch = t.randn(batch_size, n_features) * stds + means
+        normalized = normalizer.fit_transform(batch)
+
+        # Compute statistics of normalized data
+        with t.no_grad():
+            actual_mean = normalized.mean(dim=0)
+            actual_std = normalized.std(dim=0)
+            mean_error = (actual_mean - 0.0).abs().mean()
+            std_error = (actual_std - 1.0).abs().mean()
+            pbar.set_postfix(
+                mean_error=f"{mean_error:.3f}",
+                std_error=f"{std_error:.3f}",
+            )
+
+    # Final test on fresh data
+    with t.no_grad():
+        test_batch = t.randn(1000, n_features) * stds + means
+        normalized = normalizer.transform(test_batch)
+        final_mean = normalized.mean(dim=0)
+        final_std = normalized.std(dim=0)
+
+        print("\nFinal statistics:")
+        print(f"Mean (should be ~0): {final_mean}")
+        print(f"Std (should be ~1): {final_std}")
+        print(f"Learned means: {normalizer.mean}")
+        print(f"Learned stds: {normalizer.std}")
+
+        # Assert the normalization worked
+        assert t.all(final_mean.abs() < 0.1), "Means not close enough to 0"
+        assert t.all((final_std - 1.0).abs() < 0.1), "Stds not close enough to 1"
+
+
 if __name__ == "__main__":
-    test_penalty()
+    # test_penalty()
+    test_normalizer()

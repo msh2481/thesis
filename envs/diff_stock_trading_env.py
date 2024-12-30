@@ -163,10 +163,10 @@ class DiffStockTradingEnv(gym.Env):
         state = t.cat(
             [
                 cash_ratio,
-                price,
-                self.stocks / self.max_stock,
-                self.tech_array[self.time],
-                self.cash.reshape(1) / self.max_stock,
+                price * 1000,
+                self.stocks / self.max_stock * 0.001,
+                self.tech_array[self.time] * 10,
+                self.cash.reshape(1) / self.max_stock * 1e6,
                 self.cash.reshape(1) / price / self.max_stock,
             ]
         )
