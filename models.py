@@ -270,6 +270,8 @@ def fit_mlp_policy(
     polyak_average: bool = False,
     eval_interval: int = 5,
     max_weight: float = 10.0,
+    val_env_factory: Callable[[], DiffStockTradingEnv] | None = None,
+    val_period: int = 10,
 ):
     # Get dimensions once from a temporary environment
     tmp_env = env_factory()
@@ -299,6 +301,14 @@ def fit_mlp_policy(
     current_ema = 0.0
     alpha = 0.95
     gradients = []
+
+    # Initialize validation tracking if needed
+    val_returns = []
+    val_returns_ema = []
+    val_avg_returns = []
+    val_avg_returns_ema = []
+    val_current_ema = 0.0
+    val_avg_current_ema = 0.0
 
     env = env_factory()
 
@@ -386,6 +396,7 @@ def fit_mlp_policy(
         if polyak_average and it % eval_interval == 0:
             avg_policy = MLPPolicy(state_dim, action_dim)
             avg_policy.load_state_dict(avg_state)
+            avg_policy.eval()
 
             avg_episode_returns = []
             for _ in range(batch_size):
@@ -411,11 +422,50 @@ def fit_mlp_policy(
         return_stds.append(std_return.item())
         gradients.append(normalization_constant.item())
 
+        # Run validation if needed
+        if val_env_factory is not None and it % val_period == 0:
+            val_env = val_env_factory()
+            # Evaluate current policy
+            policy.eval()
+            val_episode_returns = []
+            for _ in range(batch_size):
+                val_return = rollout_fn(policy, val_env)
+                val_episode_returns.append(val_return)
+            val_mean_return = (sum(val_episode_returns) / batch_size).clamp(-100, None)
+            val_returns.append(val_mean_return.item())
+            val_current_ema = alpha * val_current_ema + (1 - alpha) * val_mean_return
+            val_returns_ema.append(val_current_ema.item())
+            policy.train()
+
+            # Evaluate averaged policy if using Polyak averaging
+            if polyak_average:
+                avg_policy = MLPPolicy(state_dim, action_dim)
+                avg_policy.load_state_dict(avg_state)
+                avg_policy.eval()
+                val_avg_episode_returns = []
+                for _ in range(batch_size):
+                    val_avg_return = rollout_fn(avg_policy, val_env)
+                    val_avg_episode_returns.append(val_avg_return)
+                val_avg_mean_return = (sum(val_avg_episode_returns) / batch_size).clamp(
+                    -100, None
+                )
+                val_avg_returns.append(val_avg_mean_return.item())
+                val_avg_current_ema = (
+                    alpha * val_avg_current_ema + (1 - alpha) * val_avg_mean_return
+                )
+                val_avg_returns_ema.append(val_avg_current_ema.item())
+
         if it % eval_interval == 0:
             l = t.tensor(returns) - t.tensor(return_stds)
             r = t.tensor(returns) + t.tensor(return_stds)
             plt.clf()
-            plt.subplot(2, 1, 1)
+
+            n_plots = 3 if val_env_factory else 2
+
+            plt.figure(figsize=(10, 10))
+            # Training returns plot
+            plt.subplot(n_plots, 1, 1)
+            plt.title("Training Returns")
             plt.axhline(0, color="k", linestyle="--")
             plt.fill_between(range(len(returns)), l, r, alpha=0.2, color="red")
             plt.plot(returns, "r-", lw=0.5, label="Current Policy")
@@ -429,14 +479,36 @@ def fit_mlp_policy(
             returns_5 = t.quantile(t.tensor(returns), 0.05)
             plt.ylim(returns_5 - 0.1, returns_95 + 0.1)
 
-            plt.subplot(2, 1, 2)
+            # Gradient plot
+            plt.subplot(n_plots, 1, 2)
+            plt.title("Gradient Norms")
             plt.plot(gradients)
             plt.yscale("log")
+
+            # Validation returns plot if applicable
+            if val_env_factory:
+                plt.subplot(n_plots, 1, 3)
+                plt.title("Validation Returns")
+                val_x = list(range(0, len(returns), val_period))
+                plt.plot(val_x, val_returns, "r-", lw=0.5, label="Current Policy")
+                plt.plot(val_x, val_returns_ema, "r--", label="Current EMA")
+                if polyak_average:
+                    plt.plot(
+                        val_x, val_avg_returns, "b-", lw=0.5, label="Polyak Average"
+                    )
+                    plt.plot(val_x, val_avg_returns_ema, "b--", label="Polyak EMA")
+                plt.legend()
+                if val_returns:
+                    val_returns_95 = t.quantile(t.tensor(val_returns), 0.95)
+                    val_returns_5 = t.quantile(t.tensor(val_returns), 0.05)
+                    plt.ylim(val_returns_5 - 0.1, val_returns_95 + 0.1)
+
+            plt.tight_layout()
             plt.savefig("logs/info.png")
 
             t.save(policy.state_dict(), f"checkpoints/policy_{it}.pth")
 
-    # Create final averaged model for return
+    # Return final averaged policy if using Polyak averaging, otherwise return current policy
     if polyak_average:
         final_policy = MLPPolicy(state_dim, action_dim)
         final_policy.load_state_dict(avg_state)

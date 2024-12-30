@@ -67,6 +67,7 @@ class PredictableEnv(DiffStockTradingEnv):
     """
 
     dt = 5
+    regenerate = False
 
     @classmethod
     @typed
@@ -95,12 +96,15 @@ class PredictableEnv(DiffStockTradingEnv):
 
     @classmethod
     @typed
-    def create(cls, n_stocks: int, tech_per_stock: int, n_steps: int):
+    def create(
+        cls, n_stocks: int, tech_per_stock: int, n_steps: int, regenerate: bool = False
+    ):
         assert tech_per_stock > 0
         price_array, tech_array = cls.build_arrays(n_steps, n_stocks, tech_per_stock)
         instance = cls(price_array, tech_array, initial_cash_ratio=0.5)
         instance.tech_per_stock = tech_per_stock
         instance.n_steps = n_steps
+        instance.regenerate = regenerate
         return instance
 
     @typed
@@ -108,9 +112,10 @@ class PredictableEnv(DiffStockTradingEnv):
         n_steps = len(self.price_array)
         n_stocks = self.stock_dim
         tech_per_stock = self.tech_dim // n_stocks
-        self.price_array, self.tech_array = self.build_arrays(
-            n_steps, n_stocks, tech_per_stock
-        )
+        if self.regenerate:
+            self.price_array, self.tech_array = self.build_arrays(
+                n_steps, n_stocks, tech_per_stock
+            )
         return super().reset_t(seed)
 
 

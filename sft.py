@@ -22,11 +22,21 @@ tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 
 
 def train_env(**kwargs):
-    return DiffStockTradingEnv(stocks_old, tech_old)
+    return MovingAverageEnv.create(
+        n_stocks=1, tech_per_stock=1, n_steps=1000, regenerate=False
+    )
+
+
+def val_env(**kwargs):
+    return MovingAverageEnv.create(
+        n_stocks=1, tech_per_stock=1, n_steps=1000, regenerate=False
+    )
 
 
 def demo_env(**kwargs):
-    return DiffStockTradingEnv(stocks_new, tech_new)
+    return MovingAverageEnv.create(
+        n_stocks=1, tech_per_stock=1, n_steps=200, regenerate=False
+    )
 
 
 env_name = "predictable"
@@ -35,6 +45,8 @@ env_name = "predictable"
 def train():
     model = fit_mlp_policy(
         env_factory=train_env,
+        val_env_factory=val_env,
+        val_period=5,
         n_epochs=1000,
         batch_size=1,
         lr=3e-5,
@@ -46,8 +58,7 @@ def train():
 
 def demo(it: int, avg: bool):
     env = demo_env()
-    # steps = env.n_steps
-    steps = env.max_step
+    steps = getattr(env, "n_steps", getattr(env, "max_step"))
     policy = MLPPolicy(env.state_dim, env.action_dim)
     if avg:
         policy.load_state_dict(
@@ -57,6 +68,7 @@ def demo(it: int, avg: bool):
         policy.load_state_dict(
             t.load(f"checkpoints/policy_{it}.pth", weights_only=False)
         )
+    policy.eval()
     state, _ = env.reset_t()
 
     # Lists to store trajectory
