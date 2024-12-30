@@ -25,19 +25,19 @@ env_name = "predictable"
 
 
 def train():
-    env = train_env()
     model = fit_mlp_policy(
-        env,
+        env_factory=train_env,
         n_epochs=1000,
         batch_size=1,
         lr=1e-3,
         rollout_fn=rollout,
+        polyak_average=True,
         # init_from="checkpoints/good.pth",
     )
 
 
 def demo():
-    it = 800
+    it = 120
     steps = 3000
 
     env = demo_env()

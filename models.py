@@ -259,18 +259,36 @@ def imitation_rollout(
         return episode_return
 
 
+@typed
 def fit_mlp_policy(
-    env: DiffStockTradingEnv,
+    env_factory: Callable[[], DiffStockTradingEnv],
     n_epochs: int = 1000,
     batch_size: int = 1,
     lr: float = 1e-3,
     rollout_fn: Callable[[SFTPolicy, DiffStockTradingEnv], Float[TT, ""]] = rollout,
     init_from: str | None = None,
-    n_workers: int = 4,
+    polyak_average: bool = False,
+    eval_interval: int = 1,
 ):
-    policy = MLPPolicy(env.state_dim, env.action_dim)
+    # Get dimensions once from a temporary environment
+    tmp_env = env_factory()
+    state_dim, action_dim = tmp_env.state_dim, tmp_env.action_dim
+    del tmp_env
+
+    policy = MLPPolicy(state_dim, action_dim)
     if init_from is not None:
         policy.load_state_dict(t.load(init_from, weights_only=False))
+
+    # Initialize average state dict if needed
+    avg_state = None
+    if polyak_average:
+        avg_state = policy.state_dict()
+        avg_returns = []
+        avg_returns_ema = []
+        avg_current_ema = 0.0
+        last_avg_return = float("-inf")
+        last_avg_ema = 0.0
+
     opt = t.optim.Adam(policy.parameters(), lr=lr)
     scheduler = t.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=0.95)
     pbar = tqdm(range(n_epochs))
@@ -281,27 +299,32 @@ def fit_mlp_policy(
     alpha = 0.95
     gradients = []
 
+    env = env_factory()
+
     for it in pbar:
         episode_returns = []
-
-        # Run episodes in parallel
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = [
-                executor.submit(rollout_fn, policy, env) for _ in range(batch_size)
-            ]
-            for future in as_completed(futures):
-                episode_returns.append(future.result())
+        for _ in range(batch_size):
+            episode_return = rollout_fn(policy, env)
+            episode_returns.append(episode_return)
 
         mean_return = sum(episode_returns) / batch_size
         return_tensors = t.tensor(episode_returns)
         std_return = (
             return_tensors.detach().std() if len(return_tensors) > 1 else t.tensor(0.0)
         )
-        pbar.set_postfix(
-            mean=mean_return.item(),
-            std=std_return.item(),
-            ema=current_ema,
-        )
+
+        pbar_info = {
+            "cur": f"{mean_return.item():.3f}",
+            "ema": f"{current_ema:.3f}",
+        }
+        if polyak_average:
+            pbar_info.update(
+                {
+                    "avg": f"{last_avg_return:.3f}",
+                    "avg_ema": f"{last_avg_ema:.3f}",
+                }
+            )
+        pbar.set_postfix(**pbar_info)
 
         opt.zero_grad()
         (-mean_return).backward()
@@ -313,13 +336,18 @@ def fit_mlp_policy(
             g = p.grad
             if g is None:
                 continue
-            if not g.isfinite().all():
+            delta = g.flatten().square().sum()
+            if not delta.isfinite():
                 logger.warning(f"Gradient is NaN: {g}")
                 p.grad = t.zeros_like(p.grad)
                 g = p.grad
-            sum_of_squares += g.flatten().square().sum()
+                delta = g.flatten().square().sum()
+            assert delta.isfinite(), "Delta is NaN"
+            sum_of_squares += delta
             count += g.numel()
         normalization_constant = t.sqrt(sum_of_squares / count)
+        sum_of_squares = t.minimum(sum_of_squares, t.tensor(1e20))
+
         assert sum_of_squares.isfinite(), "Sum of squares is NaN"
         assert (sum_of_squares >= 0).all(), "Sum of squares is negative"
         assert t.tensor(count).isfinite(), "Count is NaN"
@@ -335,21 +363,59 @@ def fit_mlp_policy(
         opt.step()
         scheduler.step()
 
+        # Update average state dict
+        if polyak_average:
+            with t.no_grad():
+                current_state = policy.state_dict()
+                for key in avg_state:
+                    delta = current_state[key] - avg_state[key]
+                    avg_state[key] = avg_state[key] + delta / (it + 1)
+                # Copy current model's normalizer stats to avg_state
+                avg_state["normalizer.mean"] = current_state["normalizer.mean"].clone()
+                avg_state["normalizer.M2"] = current_state["normalizer.M2"].clone()
+                avg_state["normalizer.count"] = current_state[
+                    "normalizer.count"
+                ].clone()
+
+        # Evaluate averaged model periodically
+        if polyak_average and it % eval_interval == 0:
+            avg_policy = MLPPolicy(state_dim, action_dim)
+            avg_policy.load_state_dict(avg_state)
+
+            avg_episode_returns = []
+            for _ in range(batch_size):
+                avg_return = rollout_fn(avg_policy, env)
+                avg_episode_returns.append(avg_return)
+            avg_mean_return = sum(avg_episode_returns) / batch_size
+            last_avg_return = avg_mean_return.item()
+            avg_returns.append(last_avg_return)
+            avg_current_ema = alpha * avg_current_ema + (1 - alpha) * avg_mean_return
+            last_avg_ema = avg_current_ema.item()
+            avg_returns_ema.append(last_avg_ema)
+
+            # Save averaged model checkpoint
+            if it % eval_interval == 0:
+                t.save(avg_state, f"checkpoints/avg_policy_{it}.pth")
+
         returns.append(mean_return.item())
         current_ema = alpha * current_ema + (1 - alpha) * mean_return.item()
         returns_ema.append(current_ema)
         return_stds.append(std_return.item())
         gradients.append(normalization_constant.item())
 
-        if it % 10 == 0:
+        if it % eval_interval == 0:
             l = t.tensor(returns) - t.tensor(return_stds)
             r = t.tensor(returns) + t.tensor(return_stds)
             plt.clf()
             plt.subplot(2, 1, 1)
             plt.axhline(0, color="k", linestyle="--")
-            plt.fill_between(range(len(returns)), l, r, alpha=0.2)
-            plt.plot(returns, "r", label="returns")
-            plt.plot(returns_ema, "b--", label="EMA")
+            plt.fill_between(range(len(returns)), l, r, alpha=0.2, color="red")
+            plt.plot(returns, "r-", label="Current Policy")
+            plt.plot(returns_ema, "r--", label="Current EMA")
+            if polyak_average:
+                eval_x = list(range(0, len(returns), eval_interval))
+                plt.plot(eval_x, avg_returns, "b-", label="Polyak Average")
+                plt.plot(eval_x, avg_returns_ema, "b--", label="Polyak EMA")
             plt.legend()
             returns_95 = t.quantile(t.tensor(returns), 0.95)
             returns_5 = t.quantile(t.tensor(returns), 0.05)
@@ -362,6 +428,11 @@ def fit_mlp_policy(
 
             t.save(policy.state_dict(), f"checkpoints/policy_{it}.pth")
 
+    # Create final averaged model for return
+    if polyak_average:
+        final_policy = MLPPolicy(state_dim, action_dim)
+        final_policy.load_state_dict(avg_state)
+        return final_policy
     return policy
 
 

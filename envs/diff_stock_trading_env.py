@@ -54,6 +54,7 @@ class DiffStockTradingEnv(gym.Env):
         ).float()
         self.initial_capital = initial_capital
         self.initial_cash_ratio = initial_cash_ratio
+        self.penalty_sum = 0.0
 
         self.state_dim = 2 + 3 * self.stock_dim + self.tech_dim
         # Environment state variables
@@ -75,6 +76,7 @@ class DiffStockTradingEnv(gym.Env):
         """Reset the environment to the initial state."""
         super().reset(seed=seed)
         self.time = 0
+        self.penalty_sum = 0.0
         current_price = self.price_array[self.time]
         self.stocks = self.initial_stocks.clone()
         stock_value = (current_price * self.stocks).sum()
@@ -108,13 +110,15 @@ class DiffStockTradingEnv(gym.Env):
         actions.data.clamp_(-1, 1)
 
         self._execute_actions(actions)
+
         penalty = self._get_penalty()
+        self.penalty_sum += penalty.item()
         reward = self._get_reward(actions, price) - penalty
         self.last_log_total_asset = self._get_log_total_asset(price)
         state = self._get_state(price)
 
         terminated = self.time == self.max_step
-        truncated = (penalty > 1).item()
+        truncated = self.penalty_sum > 1.0
 
         return state, reward, terminated, truncated, {}
 
