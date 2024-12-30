@@ -58,12 +58,11 @@ class TruePolicy(SFTPolicy):
 
 
 class PolyakNormalizer(nn.Module):
-    def __init__(self, n_features: int, burn_in: int = 5):
+    def __init__(self, n_features: int):
         super().__init__()
         self.register_buffer("mean", t.zeros(n_features))
         self.register_buffer("M2", t.zeros(n_features))  # Second moment around mean
         self.register_buffer("count", t.tensor(0.0))
-        self.burn_in = burn_in
 
     @property
     def std(self) -> TT:

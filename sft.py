@@ -44,79 +44,119 @@ def demo():
     policy = MLPPolicy(env.state_dim, env.action_dim)
     policy.load_state_dict(t.load(f"checkpoints/policy_{it}.pth", weights_only=False))
     state, _ = env.reset_t()
-    cashes = []
-    actions = []
-    prices = []
-    stocks = []
-    techs = []
-    rewards = []
-    portfolio_values = []
+
+    # Lists to store trajectory
+    cash_ratio_history = []  # scalar
+    cash_history = []  # scalar
+    action_history = []  # [n_stocks]
+    price_history = []  # [n_stocks]
+    stock_history = []  # [n_stocks]
+    tech_history = []  # [n_stocks]
+    reward_history = []  # scalar
+    portfolio_value_history = []  # scalar
     initial_cash = env.cash.item()
+    n_stocks = env.stock_dim
+
+    # Destructure initial state
+    cash_ratio = state[0]  # scalar
+    prices = state[1 : 1 + n_stocks]  # n_stocks
+    stocks = state[1 + n_stocks : 1 + 2 * n_stocks]  # n_stocks
+    techs = state[1 + 2 * n_stocks : 1 + 3 * n_stocks]  # n_stocks
+    cash = state[1 + 3 * n_stocks]  # scalar
+    cash_div_prices = state[1 + 3 * n_stocks + 1 :]  # n_stocks
 
     for _ in range(steps):
-        cash_ratio, price, stock, tech, cash, cash_div_price = state
-        cash = env.cash
         action = policy.predict(state, deterministic=True)
         state, reward, terminated, truncated, info = env.step_t(action)
+
+        # Destructure new state
+        cash_ratio = state[0]
+        prices = state[1 : 1 + n_stocks]
+        stocks = state[1 + n_stocks : 1 + 2 * n_stocks]
+        techs = state[1 + 2 * n_stocks : 1 + 3 * n_stocks]
+        cash = state[1 + 3 * n_stocks]
+        cash_div_prices = state[1 + 3 * n_stocks + 1 :]
+
         penalty = env._get_penalty()
         if penalty > 0.0:
             logger.warning(f"Penalty: {penalty.item()}")
 
-        cashes.append(cash.item())
-        actions.append(action.item())
-        prices.append(price.item())
-        stocks.append(stock.item())
-        techs.append(tech.item())
-        rewards.append(reward.item())
-        portfolio_values.append(cash.item() + stock.item() * price.item())
+        # Store vectors and scalars
+        cash_ratio_history.append(cash_ratio.item())
+        cash_history.append(cash.item())
+        action_history.append(action.detach().cpu().numpy())
+        price_history.append(prices.detach().cpu().numpy())
+        stock_history.append(stocks.detach().cpu().numpy())
+        tech_history.append(techs.detach().cpu().numpy())
+        reward_history.append(reward.item())
+        portfolio_value_history.append(cash.item() + (stocks * prices).sum().item())
 
         done = terminated or truncated
         if done:
             break
 
+    # Convert lists to arrays
+    cash_ratio_history = np.array(cash_ratio_history)
+    cash_history = np.array(cash_history)
+    action_history = np.array(action_history)
+    price_history = np.array(price_history)
+    stock_history = np.array(stock_history)
+    tech_history = np.array(tech_history)
+    portfolio_value_history = np.array(portfolio_value_history)
+
     # Calculate buy & hold returns
-    avg_stock = np.mean(stocks)
+    avg_stocks = stock_history.mean(axis=0)  # [n_stocks]
     buy_hold_values = []
-    for price in prices:
-        value = initial_cash - avg_stock * prices[0] + avg_stock * price
+    for price in price_history:  # price is [n_stocks]
+        value = (
+            initial_cash
+            - (avg_stocks * price_history[0]).sum()
+            + (avg_stocks * price).sum()
+        )
         buy_hold_values.append(value)
+    buy_hold_values = np.array(buy_hold_values)
 
     plt.figure(figsize=(10, 8))
 
     plt.subplot(2, 3, 1)
-    plt.plot(cashes, "b-", label="Cash")
+    plt.plot(cash_history, "b-", label="Cash")
+    plt.plot(cash_ratio_history, "r--", label="Cash Ratio")
     plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
     plt.subplot(2, 3, 2)
-    plt.plot(prices, "r-", label="Price")
-    plt.plot(techs, "m-", label="Technical Signal")
+    for i in range(n_stocks):
+        plt.plot(price_history[:, i], f"C{i}-", label=f"Price {i}")
+        plt.plot(tech_history[:, i], f"C{i}--", label=f"Tech {i}")
     plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
     plt.subplot(2, 3, 3)
-    plt.plot(stocks, "g-", label="Stock Holdings")
-    plt.axhline(avg_stock, color="k", linestyle="--", label="Avg Holdings")
+    for i in range(n_stocks):
+        plt.plot(stock_history[:, i], f"C{i}-", label=f"Stock {i}")
+        plt.axhline(avg_stocks[i], color=f"C{i}", linestyle="--", label=f"Avg {i}")
     plt.axhline(0, color="k", linestyle=":")
     plt.legend()
 
     plt.subplot(2, 3, 4)
-    plt.plot(actions, "k-", label="Action")
+    for i in range(n_stocks):
+        plt.plot(action_history[:, i], f"C{i}-", label=f"Action {i}")
     plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
     plt.subplot(2, 3, 5)
-    plt.plot(rewards, "y-", label="Reward")
-    plt.plot(np.cumsum(rewards), "r-", label="Strategy Cum. Reward")
-    strategy_value_change = np.array(portfolio_values) - portfolio_values[0]
-    buyhold_value_change = np.array(buy_hold_values) - buy_hold_values[0]
+    plt.plot(reward_history, "y-", label="Reward")
+    plt.plot(np.cumsum(reward_history), "r-", label="Strategy Cum. Reward")
+    strategy_value_change = portfolio_value_history - portfolio_value_history[0]
+    buyhold_value_change = buy_hold_values - buy_hold_values[0]
     plt.plot(buyhold_value_change, "b--", label="Buy & Hold Cum. Return")
     plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
     plt.subplot(2, 3, 6)
-    plt.plot(prices, "r-", label="Price")
-    plt.plot(actions, "m-", label="Action")
+    for i in range(n_stocks):
+        plt.plot(price_history[:, i], f"C{i}-", label=f"Price {i}")
+        plt.plot(action_history[:, i], f"C{i}--", alpha=0.5, label=f"Action {i}")
     plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
