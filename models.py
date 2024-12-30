@@ -286,7 +286,9 @@ def fit_mlp_policy(
             episode_returns.append(episode_return)
         mean_return = sum(episode_returns) / batch_size
         return_tensors = t.tensor(episode_returns)
-        std_return = return_tensors.detach().std()
+        std_return = (
+            return_tensors.detach().std() if len(return_tensors) > 1 else t.tensor(0.0)
+        )
         pbar.set_postfix(
             mean=mean_return.item(),
             std=std_return.item(),
@@ -309,6 +311,10 @@ def fit_mlp_policy(
             sum_of_squares += g.flatten().square().sum()
             count += g.numel()
         normalization_constant = t.sqrt(sum_of_squares / count)
+        assert sum_of_squares.isfinite(), "Sum of squares is NaN"
+        assert (sum_of_squares >= 0).all(), "Sum of squares is negative"
+        assert t.tensor(count).isfinite(), "Count is NaN"
+        assert count > 0, "Count is non-positive"
         assert (
             normalization_constant.isfinite()
         ), "Gradient normalization constant is NaN"

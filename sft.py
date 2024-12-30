@@ -14,11 +14,11 @@ from tqdm import tqdm
 
 
 def train_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=1000)
 
 
 def demo_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=200)
+    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=3000)
 
 
 env_name = "predictable"
@@ -38,7 +38,7 @@ def train():
 
 def demo():
     it = 800
-    steps = 80
+    steps = 3000
 
     env = demo_env()
     policy = MLPPolicy(env.state_dim, env.action_dim)
@@ -181,6 +181,6 @@ def evaluate():
 
 
 if __name__ == "__main__":
-    # train()
-    demo()
+    train()
+    # demo()
     # evaluate()
