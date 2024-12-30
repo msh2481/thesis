@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from concurrent.futures import as_completed, ThreadPoolExecutor
 
 import torch as t
 from beartype import beartype as typed
@@ -265,6 +266,7 @@ def fit_mlp_policy(
     lr: float = 1e-3,
     rollout_fn: Callable[[SFTPolicy, DiffStockTradingEnv], Float[TT, ""]] = rollout,
     init_from: str | None = None,
+    n_workers: int = 4,
 ):
     policy = MLPPolicy(env.state_dim, env.action_dim)
     if init_from is not None:
@@ -281,9 +283,15 @@ def fit_mlp_policy(
 
     for it in pbar:
         episode_returns = []
-        for _ in range(batch_size):
-            episode_return = rollout_fn(policy, env)
-            episode_returns.append(episode_return)
+
+        # Run episodes in parallel
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = [
+                executor.submit(rollout_fn, policy, env) for _ in range(batch_size)
+            ]
+            for future in as_completed(futures):
+                episode_returns.append(future.result())
+
         mean_return = sum(episode_returns) / batch_size
         return_tensors = t.tensor(episode_returns)
         std_return = (
@@ -297,7 +305,8 @@ def fit_mlp_policy(
 
         opt.zero_grad()
         (-mean_return).backward()
-        # Compute l2 norm across all parameters
+
+        # Gradient normalization
         sum_of_squares = t.tensor(1.0)
         count = 1.0
         for p in policy.parameters():
@@ -318,7 +327,6 @@ def fit_mlp_policy(
         assert (
             normalization_constant.isfinite()
         ), "Gradient normalization constant is NaN"
-        # Normalize each parameter's gradients by dividing by total norm
         if normalization_constant > 0:
             for p in policy.parameters():
                 if p.grad is not None:

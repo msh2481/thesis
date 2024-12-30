@@ -104,24 +104,30 @@ def demo():
     tech_history = np.array(tech_history)
     portfolio_value_history = np.array(portfolio_value_history)
 
-    # Calculate buy & hold returns
-    avg_stocks = stock_history.mean(axis=0)  # [n_stocks]
+    # Calculate buy & hold returns based on average cash ratio
+    avg_cash_ratio = cash_ratio_history.mean()
     buy_hold_values = []
+
+    # Initial allocation based on average cash ratio
+    initial_stock_value = (1 - avg_cash_ratio) * initial_cash
+    initial_stock_units = (
+        initial_stock_value / price_history[0].sum()
+    )  # Equally weighted portfolio
+    initial_cash_held = avg_cash_ratio * initial_cash
+
     for price in price_history:  # price is [n_stocks]
-        value = (
-            initial_cash
-            - (avg_stocks * price_history[0]).sum()
-            + (avg_stocks * price).sum()
-        )
+        # For each timestep, calculate portfolio value with constant allocation
+        stock_value = initial_stock_units * price.sum()
+        value = initial_cash_held + stock_value
         buy_hold_values.append(value)
     buy_hold_values = np.array(buy_hold_values)
 
     plt.figure(figsize=(10, 8))
 
     plt.subplot(2, 3, 1)
-    plt.plot(cash_history, "b-", label="Cash")
-    plt.plot(cash_ratio_history, "r--", label="Cash Ratio")
-    plt.axhline(0, color="k", linestyle="--")
+    plt.plot(cash_ratio_history, "b-", label="Cash Ratio")
+    plt.axhline(avg_cash_ratio, color="k", linestyle="--", label="Avg Cash Ratio")
+    plt.axhline(0, color="k", linestyle=":")
     plt.legend()
 
     plt.subplot(2, 3, 2)
@@ -134,7 +140,6 @@ def demo():
     plt.subplot(2, 3, 3)
     for i in range(n_stocks):
         plt.plot(stock_history[:, i], f"C{i}-", label=f"Stock {i}")
-        plt.axhline(avg_stocks[i], color=f"C{i}", linestyle="--", label=f"Avg {i}")
     plt.axhline(0, color="k", linestyle=":")
     plt.legend()
 
@@ -145,10 +150,9 @@ def demo():
     plt.legend()
 
     plt.subplot(2, 3, 5)
-    plt.plot(reward_history, "y-", label="Reward")
     plt.plot(np.cumsum(reward_history), "r-", label="Strategy Cum. Reward")
     strategy_value_change = portfolio_value_history - portfolio_value_history[0]
-    buyhold_value_change = buy_hold_values - buy_hold_values[0]
+    buyhold_value_change = np.log(buy_hold_values) - np.log(buy_hold_values[0])
     plt.plot(buyhold_value_change, "b--", label="Buy & Hold Cum. Return")
     plt.axhline(0, color="k", linestyle="--")
     plt.legend()
@@ -181,6 +185,6 @@ def evaluate():
 
 
 if __name__ == "__main__":
-    train()
-    # demo()
+    # train()
+    demo()
     # evaluate()
