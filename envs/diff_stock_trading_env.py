@@ -112,13 +112,13 @@ class DiffStockTradingEnv(gym.Env):
         self._execute_actions(actions)
 
         penalty = self._get_penalty()
+        truncated = self.penalty_sum > 10.0
         self.penalty_sum += penalty.item()
         reward = self._get_reward(actions, price) - penalty
         self.last_log_total_asset = self._get_log_total_asset(price)
         state = self._get_state(price)
 
         terminated = self.time == self.max_step
-        truncated = self.penalty_sum > 1.0
 
         return state, reward, terminated, truncated, {}
 

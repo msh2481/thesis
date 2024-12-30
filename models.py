@@ -268,7 +268,7 @@ def fit_mlp_policy(
     rollout_fn: Callable[[SFTPolicy, DiffStockTradingEnv], Float[TT, ""]] = rollout,
     init_from: str | None = None,
     polyak_average: bool = False,
-    eval_interval: int = 1,
+    eval_interval: int = 5,
 ):
     # Get dimensions once from a temporary environment
     tmp_env = env_factory()
@@ -345,8 +345,9 @@ def fit_mlp_policy(
             assert delta.isfinite(), "Delta is NaN"
             sum_of_squares += delta
             count += g.numel()
-        normalization_constant = t.sqrt(sum_of_squares / count)
+
         sum_of_squares = t.minimum(sum_of_squares, t.tensor(1e20))
+        normalization_constant = t.sqrt(sum_of_squares / count)
 
         assert sum_of_squares.isfinite(), "Sum of squares is NaN"
         assert (sum_of_squares >= 0).all(), "Sum of squares is negative"
@@ -389,7 +390,10 @@ def fit_mlp_policy(
             avg_mean_return = sum(avg_episode_returns) / batch_size
             last_avg_return = avg_mean_return.item()
             avg_returns.append(last_avg_return)
-            avg_current_ema = alpha * avg_current_ema + (1 - alpha) * avg_mean_return
+            for _ in range(eval_interval):
+                avg_current_ema = (
+                    alpha * avg_current_ema + (1 - alpha) * avg_mean_return
+                )
             last_avg_ema = avg_current_ema.item()
             avg_returns_ema.append(last_avg_ema)
 
@@ -410,11 +414,11 @@ def fit_mlp_policy(
             plt.subplot(2, 1, 1)
             plt.axhline(0, color="k", linestyle="--")
             plt.fill_between(range(len(returns)), l, r, alpha=0.2, color="red")
-            plt.plot(returns, "r-", label="Current Policy")
+            plt.plot(returns, "r-", lw=0.5, label="Current Policy")
             plt.plot(returns_ema, "r--", label="Current EMA")
             if polyak_average:
                 eval_x = list(range(0, len(returns), eval_interval))
-                plt.plot(eval_x, avg_returns, "b-", label="Polyak Average")
+                plt.plot(eval_x, avg_returns, "b-", lw=0.5, label="Polyak Average")
                 plt.plot(eval_x, avg_returns_ema, "b--", label="Polyak EMA")
             plt.legend()
             returns_95 = t.quantile(t.tensor(returns), 0.95)

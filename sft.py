@@ -14,11 +14,11 @@ from tqdm import tqdm
 
 
 def train_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=1000)
+    return CashRatioEnv.create(n_stocks=1, tech_per_stock=1, n_steps=1000)
 
 
 def demo_env(**kwargs):
-    return TrendFollowingEnv.create(n_stocks=1, tech_per_stock=1, n_steps=3000)
+    return CashRatioEnv.create(n_stocks=1, tech_per_stock=1, n_steps=3000)
 
 
 env_name = "predictable"
@@ -29,20 +29,21 @@ def train():
         env_factory=train_env,
         n_epochs=1000,
         batch_size=1,
-        lr=1e-3,
+        lr=3e-4,
         rollout_fn=rollout,
         polyak_average=True,
         # init_from="checkpoints/good.pth",
     )
 
 
-def demo():
-    it = 120
+def demo(it: int):
     steps = 3000
 
     env = demo_env()
     policy = MLPPolicy(env.state_dim, env.action_dim)
-    policy.load_state_dict(t.load(f"checkpoints/policy_{it}.pth", weights_only=False))
+    policy.load_state_dict(
+        t.load(f"checkpoints/avg_policy_{it}.pth", weights_only=False)
+    )
     state, _ = env.reset_t()
 
     # Lists to store trajectory
@@ -184,7 +185,21 @@ def evaluate():
     print(f"Std: {np.std(results) / np.sqrt(n)}")
 
 
+import argparse
+
 if __name__ == "__main__":
-    # train()
-    demo()
-    # evaluate()
+    parser = argparse.ArgumentParser(description="Select mode and parameters")
+    parser.add_argument(
+        "mode",
+        choices=["train", "demo"],
+        help="Mode to run: train or demo",
+    )
+    parser.add_argument(
+        "--iter", type=int, default=100, help="Number of iterations to load for demo"
+    )
+    args = parser.parse_args()
+
+    if args.mode == "train":
+        train()
+    elif args.mode == "demo":
+        demo(args.iter)

@@ -51,12 +51,12 @@ class CashRatioEnv(DiffStockTradingEnv):
         old_dev = t.abs(0.5 - old_ratio)
         new_dev = t.abs(0.5 - new_ratio)
         reward = old_new**2 - (old_dev**2 + new_dev**2)
+        truncated = self.last_log_total_asset.item() < -10.0
         self.last_log_total_asset = self._get_log_total_asset(price)
 
         state = self._get_state(price)
 
         terminated = self.time == self.max_step
-        truncated = False
 
         return state, reward, terminated, truncated, {}
 
