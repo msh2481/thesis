@@ -109,9 +109,9 @@ class DiffStockTradingEnv(gym.Env):
         actions = t.where(t.isfinite(actions), actions, t.tensor(0.0))
         actions.data.clamp_(-1, 1)
 
-        self._execute_actions(actions)
+        scale_penalty = self._execute_actions(actions)
 
-        penalty = self._get_penalty()
+        penalty = self._get_penalty() + scale_penalty
         truncated = self.penalty_sum > 10.0
         self.penalty_sum += penalty.item()
         reward = self._get_reward(actions, price) - penalty
@@ -133,7 +133,7 @@ class DiffStockTradingEnv(gym.Env):
         )
 
     @typed
-    def _execute_actions(self, actions: TActionVec) -> None:
+    def _execute_actions(self, actions: TActionVec) -> TReward:
         """Execute buy and sell actions."""
         assert actions.shape == (self.action_dim,)
         price = self.price_array[self.time]
@@ -141,8 +141,32 @@ class DiffStockTradingEnv(gym.Env):
         actual_prices = price * (
             1 + (actions > 0) * self.buy_cost_pct - (actions < 0) * self.sell_cost_pct
         )
-        self.stocks = self.stocks + action_quantities
-        self.cash = self.cash - (action_quantities * actual_prices).sum()
+
+        # Calculate maximum scale that keeps both cash and stocks non-negative
+        # For stocks: new_stocks = stocks + scale * action_quantities >= 0
+        # For cash: new_cash = cash - scale * (action_quantities * actual_prices).sum() >= 0
+
+        # For stocks: scale <= -stocks / action_quantities where action_quantities < 0
+        stock_scales = t.where(
+            action_quantities < 0,
+            -self.stocks / action_quantities,
+            t.tensor(float("inf")),
+        )
+        max_stock_scale = stock_scales.min()
+
+        # For cash: scale <= cash / (action_quantities * actual_prices).sum() where sum > 0
+        cash_flow = (action_quantities * actual_prices).sum()
+        max_cash_scale = (
+            self.cash / cash_flow if cash_flow > 0 else t.tensor(float("inf"))
+        )
+
+        scale = t.minimum(max_stock_scale, max_cash_scale).clamp(1e-6, 1)
+
+        self.stocks = self.stocks + scale * action_quantities
+        self.cash = self.cash - scale * (action_quantities * actual_prices).sum()
+
+        scale_penalty = -0.01 * scale.log()
+        return scale_penalty
 
     @typed
     def _get_penalty(self) -> TReward:

@@ -270,8 +270,11 @@ def fit_mlp_policy(
     polyak_average: bool = False,
     eval_interval: int = 5,
     max_weight: float = 10.0,
+    langevin_coef: float = 1e-3,
     val_env_factory: Callable[[], DiffStockTradingEnv] | None = None,
     val_period: int = 10,
+    momentum: float = 0.9,
+    weight_decay: float = 0.0,
 ):
     # Get dimensions once from a temporary environment
     tmp_env = env_factory()
@@ -292,8 +295,16 @@ def fit_mlp_policy(
         last_avg_return = float("-inf")
         last_avg_ema = 0.0
 
-    opt = t.optim.Adam(policy.parameters(), lr=lr)
-    scheduler = t.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=0.95)
+    # opt = t.optim.Adam(policy.parameters(), lr=lr)
+    opt = t.optim.SGD(
+        policy.parameters(),
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay,
+    )
+
+    # Without scheduler for now (gamma = 1.0)
+    scheduler = t.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=1.0)
     pbar = tqdm(range(n_epochs))
     returns = []
     return_stds = []
@@ -335,6 +346,18 @@ def fit_mlp_policy(
                     "avg_ema": f"{last_avg_ema:.3f}",
                 }
             )
+        if val_returns:
+            pbar_info.update(
+                {
+                    "val_ema": f"{val_returns_ema[-1]:.3f}",
+                }
+            )
+        if val_avg_returns:
+            pbar_info.update(
+                {
+                    "val_avg_ema": f"{val_avg_returns_ema[-1]:.3f}",
+                }
+            )
         pbar.set_postfix(**pbar_info)
 
         opt.zero_grad()
@@ -374,6 +397,10 @@ def fit_mlp_policy(
 
         opt.step()
         scheduler.step()
+
+        C = langevin_coef * ((2 * lr) ** 0.5)
+        for p in policy.parameters():
+            p.data.add_(C * t.randn_like(p.data))
 
         for p in policy.parameters():
             p.data.clamp_(-max_weight, max_weight)
@@ -458,6 +485,7 @@ def fit_mlp_policy(
         if it % eval_interval == 0:
             l = t.tensor(returns) - t.tensor(return_stds)
             r = t.tensor(returns) + t.tensor(return_stds)
+            plt.close()
             plt.clf()
 
             n_plots = 3 if val_env_factory else 2
@@ -467,6 +495,10 @@ def fit_mlp_policy(
             plt.subplot(n_plots, 1, 1)
             plt.title("Training Returns")
             plt.axhline(0, color="k", linestyle="--")
+            plt.grid(True, which="major", alpha=0.5)
+            plt.grid(True, which="minor", alpha=0.1)
+            plt.minorticks_on()
+            plt.gca().yaxis.set_minor_locator(plt.MultipleLocator(0.1))
             plt.fill_between(range(len(returns)), l, r, alpha=0.2, color="red")
             plt.plot(returns, "r-", lw=0.5, label="Current Policy")
             plt.plot(returns_ema, "r--", label="Current EMA")
@@ -484,11 +516,16 @@ def fit_mlp_policy(
             plt.title("Gradient Norms")
             plt.plot(gradients)
             plt.yscale("log")
+            plt.grid(True, which="major", alpha=0.3)
 
             # Validation returns plot if applicable
             if val_env_factory:
                 plt.subplot(n_plots, 1, 3)
                 plt.title("Validation Returns")
+                plt.grid(True, which="major", alpha=0.5)
+                plt.grid(True, which="minor", alpha=0.1)
+                plt.minorticks_on()
+                plt.gca().yaxis.set_minor_locator(plt.MultipleLocator(0.1))
                 val_x = list(range(0, len(returns), val_period))
                 plt.plot(val_x, val_returns, "r-", lw=0.5, label="Current Policy")
                 plt.plot(val_x, val_returns_ema, "r--", label="Current EMA")
@@ -502,6 +539,7 @@ def fit_mlp_policy(
                     val_returns_95 = t.quantile(t.tensor(val_returns), 0.95)
                     val_returns_5 = t.quantile(t.tensor(val_returns), 0.05)
                     plt.ylim(val_returns_5 - 0.1, val_returns_95 + 0.1)
+                plt.axhline(0, color="k", linestyle="--")
 
             plt.tight_layout()
             plt.savefig("logs/info.png")

@@ -22,19 +22,19 @@ tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 
 
 def train_env(**kwargs):
-    return MovingAverageEnv.create(
+    return TrendFollowingEnv.create(
         n_stocks=1, tech_per_stock=1, n_steps=1000, regenerate=False
     )
 
 
 def val_env(**kwargs):
-    return MovingAverageEnv.create(
+    return TrendFollowingEnv.create(
         n_stocks=1, tech_per_stock=1, n_steps=1000, regenerate=False
     )
 
 
 def demo_env(**kwargs):
-    return MovingAverageEnv.create(
+    return TrendFollowingEnv.create(
         n_stocks=1, tech_per_stock=1, n_steps=200, regenerate=False
     )
 
@@ -49,9 +49,13 @@ def train():
         val_period=5,
         n_epochs=1000,
         batch_size=1,
-        lr=3e-5,
+        lr=1e-6,
         rollout_fn=rollout,
         polyak_average=True,
+        max_weight=10.0,
+        langevin_coef=1e-3,
+        momentum=0.99,
+        weight_decay=1e-3,
         # init_from="checkpoints/good.pth",
     )
 
