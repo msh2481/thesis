@@ -38,23 +38,24 @@ tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 #         n_stocks=1, tech_per_stock=1, n_steps=200, regenerate=False
 #     )
 
-full_train_env = DiffStockTradingEnv.build(stocks_old, tech_old)
-logger.warning(f"Full train env length: {full_train_env.price_array.shape[0]}")
+# full_train_env = DiffStockTradingEnv.build(stocks_old, tech_old)
+# logger.warning(f"Full train env length: {full_train_env.price_array.shape[0]}")
 
 
 def train_env(**kwargs):
-    segment_length = 500
-    l = np.random.randint(0, full_train_env.price_array.shape[0] - segment_length)
-    r = l + segment_length
-    return full_train_env.subsegment(l, r)
+    # segment_length = 500
+    # l = np.random.randint(0, full_train_env.price_array.shape[0] - segment_length)
+    # r = l + segment_length
+    # return full_train_env.subsegment(l, r)
+    return DiffStockTradingEnv(stocks_old, tech_old)
 
 
 def val_env(**kwargs):
-    return DiffStockTradingEnv.build(stocks_new, tech_new)
+    return DiffStockTradingEnv(stocks_new, tech_new)
 
 
 def demo_env(**kwargs):
-    return DiffStockTradingEnv.build(stocks_new, tech_new)
+    return DiffStockTradingEnv(stocks_new, tech_new)
 
 
 env_name = "predictable"
