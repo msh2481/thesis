@@ -73,7 +73,7 @@ def train():
         max_weight=10.0,
         langevin_coef=0.0,  # 1e-4,
         # prior_std=10.0,
-        dropout_rate=0.9,
+        dropout_rate=0.95,
         # init_from="checkpoints/good.pth",
     )
 

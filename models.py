@@ -309,7 +309,7 @@ def fit_mlp_policy(
     returns = []
     return_stds = []
     returns_ema = []
-    current_ema = 0.0
+    current_ema = t.zeros(())
     alpha = 0.95
     gradients = []
 
@@ -318,8 +318,8 @@ def fit_mlp_policy(
     val_returns_ema = []
     val_avg_returns = []
     val_avg_returns_ema = []
-    val_current_ema = 0.0
-    val_avg_current_ema = 0.0
+    val_current_ema = t.zeros(())
+    val_avg_current_ema = t.zeros(())
 
     env = env_factory()
     current_lr = lr
