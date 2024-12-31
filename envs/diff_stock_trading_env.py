@@ -195,6 +195,7 @@ class DiffStockTradingEnv(gym.Env):
             soft_greater(cash_ratio, 0.1)
             + soft_greater(1 - cash_ratio, 0.1)
             # + soft_greater(self.stocks, 0.1).sum()
+            + 0.01 * self.stocks.std() / (self.stocks.norm() + 1e-8)
         )
         return penalty
 
