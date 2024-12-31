@@ -8,9 +8,8 @@ from envs.benchmark import (
     PredictableEnv,
     TrendFollowingEnv,
 )
-from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
-from models import fit_mlp_policy, imitation_rollout, MLPPolicy, rollout, TruePolicy
+from models import fit_mlp_policy, MLPPolicy, rollout
 from tqdm import tqdm
 
 stocks_new = t.tensor(np.load("stocks_new.npy"), dtype=t.float32)
@@ -23,19 +22,19 @@ tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 
 def train_env(**kwargs):
     return TrendFollowingEnv.create(
-        n_stocks=3, tech_per_stock=2, n_steps=1000, regenerate=True
+        n_stocks=1, tech_per_stock=1, n_steps=500, regenerate=True
     )
 
 
 def val_env(**kwargs):
     return TrendFollowingEnv.create(
-        n_stocks=3, tech_per_stock=2, n_steps=1000, regenerate=False
+        n_stocks=1, tech_per_stock=1, n_steps=500, regenerate=False
     )
 
 
 def demo_env(**kwargs):
     return TrendFollowingEnv.create(
-        n_stocks=3, tech_per_stock=2, n_steps=200, regenerate=False
+        n_stocks=1, tech_per_stock=1, n_steps=200, regenerate=False
     )
 
 
@@ -44,7 +43,7 @@ def demo_env(**kwargs):
 
 
 # def train_env(**kwargs):
-#     segment_length = 500
+#     segment_length = 1000
 #     l = np.random.randint(0, full_train_env.price_array.shape[0] - segment_length)
 #     r = l + segment_length
 #     return full_train_env.subsegment(l, r)
@@ -56,9 +55,6 @@ def demo_env(**kwargs):
 
 # def demo_env(**kwargs):
 #     return DiffStockTradingEnv.build(stocks_new, tech_new)
-
-
-env_name = "predictable"
 
 
 def train():
@@ -74,8 +70,8 @@ def train():
         max_weight=10.0,
         langevin_coef=0.0,  # 1e-4,
         # prior_std=10.0,
-        # dropout_rate=0.95,
-        init_from="checkpoints/policy_200.pth",
+        # dropout_rate=0.9,
+        # init_from="checkpoints/tf.pth",
     )
 
 
@@ -225,7 +221,7 @@ def evaluate():
     results = []
     for _ in tqdm(range(n)):
         env = demo_env()
-        policy = TruePolicy(env.state_dim, env.action_dim)
+        policy = SafePolicy(env.state_dim, env.action_dim)
         result = rollout(policy, env, deterministic=True)
         results.append(result.item())
     print("Median reward:", np.median(results))

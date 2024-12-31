@@ -153,18 +153,17 @@ class DiffStockTradingEnv(gym.Env):
         actions = t.where(t.isfinite(actions), actions, t.tensor(0.0))
         actions.data.clamp_(-1, 1)
 
-        self._execute_actions(actions)
-
-        penalty = self._get_penalty()
+        actual_actions, scale_penalty = self._execute_actions(actions)
+        penalty = scale_penalty + self._get_penalty()
         truncated = self.penalty_sum > 100.0
         self.penalty_sum += penalty.item()
-        reward = self._get_reward(actions, price) - penalty
+        reward = self._get_reward(actual_actions, price) - penalty
         self.last_log_total_asset = self._get_log_total_asset(price)
         state = self._get_state(price)
 
         terminated = self.time == self.max_step
 
-        return state, reward, terminated, truncated, {}
+        return state, reward, terminated, truncated, {"actual_actions": actual_actions}
 
     @typed
     def _get_log_total_asset(self, current_price: TPriceVec) -> TMoney:
@@ -177,26 +176,44 @@ class DiffStockTradingEnv(gym.Env):
         )
 
     @typed
-    def _execute_actions(self, actions: TActionVec) -> None:
-        """Execute buy and sell actions."""
+    def _execute_actions(self, actions: TActionVec) -> tuple[TActionVec, TReward]:
+        """Execute buy and sell actions. Returns the actual actions taken and the scaling penalty."""
         assert actions.shape == (self.action_dim,)
         price = self.price_array[self.time]
         action_quantities = actions * self.max_stock
         actual_prices = price * (
             1 + (actions > 0) * self.buy_cost_pct - (actions < 0) * self.sell_cost_pct
         )
+
+        scale = t.ones(())
+        qp = (action_quantities * actual_prices).sum()
+        if qp > 0:
+            scale = t.minimum(scale, (self.cash - 0.1) / (qp + 1e-8))
+        stock_scales = t.where(
+            action_quantities < 0,
+            (self.stocks - 0.1) / (-action_quantities + 1e-8),
+            t.tensor(1.0),
+        )
+        scale = t.minimum(scale, stock_scales.min())
+        scale_penalty = 1.0 - scale
+        if scale_penalty > 1e-8:
+            logger.warning(f"Scale penalty: {scale_penalty}. Safety reset.")
+            # Take a safe action
+            total_value = self.cash + (self.stocks * price).sum()
+            # Equal distribution target
+            target_value = total_value / (2 * self.stock_dim)
+            target_stocks = target_value / price
+            action_quantities = target_stocks - self.stocks
+
         self.stocks = self.stocks + action_quantities
         self.cash = self.cash - (action_quantities * actual_prices).sum()
+
+        return action_quantities / self.max_stock, scale_penalty
 
     @typed
     def _get_penalty(self) -> TReward:
         cash_ratio = self._get_cash_ratio(self.price_array[self.time])
-        penalty = (
-            soft_greater(cash_ratio, 0.1)
-            + soft_greater(1 - cash_ratio, 0.1)
-            # + soft_greater(self.stocks, 0.1).sum()
-            # + 0.01 * t.relu(self.stocks.std() / (self.stocks.norm() + 1e-8) - 0.1)
-        )
+        penalty = soft_greater(cash_ratio, 0.1) + soft_greater(1 - cash_ratio, 0.1)
         return penalty
 
     @typed
@@ -220,7 +237,7 @@ class DiffStockTradingEnv(gym.Env):
                 self.stocks / self.max_stock,
                 self.tech_array[self.time],
                 self.cash.reshape(1) / self.max_stock,
-                self.cash.reshape(1) / price / self.max_stock,
+                self.cash.reshape(-1) / price / self.max_stock,
             ]
         )
         max_abs = state.abs().max()
@@ -286,3 +303,64 @@ def test_env_1():
         _, reward, terminated, truncated, _ = env.step(action)
         done = terminated or truncated
         print(reward, done)
+
+
+def test_env_2():
+    """Test safety mechanism by continuously buying first stock."""
+    n = 50
+    prices = t.ones((n, 2)) * 1.0  # Constant prices to focus on quantities
+    techs = t.zeros((n, 2))  # No technical indicators needed
+    env = DiffStockTradingEnv.build(
+        prices, techs, initial_stocks=1, initial_cash_ratio=0.4
+    )
+
+    # Track history
+    cash_history = []
+    stock_history = []
+    action_history = []
+    actual_action_history = []
+
+    state, _ = env.reset_t()
+    cash_history.append(env.cash.item())
+    stock_history.append(env.stocks[0].item())
+
+    # Try to buy first stock aggressively
+    for _ in range(n - 1):
+        action = t.tensor([0.0007, 0.0])  # Always try to buy max of first stock
+        action_history.append(action[0].item())
+
+        state, reward, terminated, truncated, info = env.step_t(action)
+        actual_action_history.append(info["actual_actions"][0].item())
+        cash_history.append(env.cash.item())
+        stock_history.append(env.stocks[0].item())
+
+        if terminated or truncated:
+            break
+
+    # Plot results
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(12, 8))
+
+    plt.subplot(2, 1, 1)
+    plt.plot(cash_history, "b-", label="Cash")
+    plt.plot(stock_history, "r-", label="Stock 1 Quantity")
+    plt.axhline(0.1, color="k", linestyle="--", label="Safety Threshold")
+    plt.grid(True)
+    plt.legend()
+    plt.title("Cash and Stock Quantities")
+
+    plt.subplot(2, 1, 2)
+    plt.plot(action_history, "b-", label="Attempted Actions")
+    plt.plot(actual_action_history, "r-", label="Actual Actions")
+    plt.grid(True)
+    plt.legend()
+    plt.title("Actions vs Actual Actions")
+
+    plt.tight_layout()
+    plt.savefig("logs/safety_test.png")
+    plt.close()
+
+
+if __name__ == "__main__":
+    test_env_2()

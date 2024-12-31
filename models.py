@@ -35,30 +35,6 @@ class SFTPolicy(nn.Module, ABC):
             return dist.rsample()
 
 
-class TruePolicy(SFTPolicy):
-    def __init__(self, input_dim: int, output_dim: int, dims: list[int] = [128, 128]):
-        super().__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-
-    @typed
-    def action_distribution(self, state) -> Distribution:
-        cash_ratio = state[0]
-        cur = state[1]
-        stock = state[2]
-        nxt = state[3]
-        cash = state[4]
-        cash_div_cur = state[5]
-        mu = t.zeros(self.output_dim)
-        sigma = t.zeros(self.output_dim)
-        if nxt > cur and cash_ratio > 0.3:
-            mu.data.fill_(0.2 * cash_div_cur)
-        elif nxt < cur and cash_ratio < 0.7:
-            mu.data.fill_(-0.2 * stock)
-        sigma.data.fill_(1e-9)
-        return t.distributions.Normal(mu, sigma)
-
-
 class PolyakNormalizer(nn.Module):
     def __init__(self, n_features: int):
         super().__init__()
@@ -210,6 +186,7 @@ def rollout(
     rewards = [zero_with_gradients]
     total_reward = 0
     total_penalty = 0
+
     for step in range(env.max_step):
         action = policy.predict(state, deterministic=deterministic)
         state, reward, terminated, truncated, _ = env.step_t(action)
@@ -219,43 +196,9 @@ def rollout(
         rewards.append(reward)
         if terminated or truncated:
             break
+
     episode_return = sum(rewards)
     return episode_return
-
-
-@typed
-def imitation_rollout(
-    policy: SFTPolicy,
-    env: DiffStockTradingEnv,
-    deterministic: bool = False,
-    use_env: bool = True,
-) -> Float[TT, ""]:
-    true_policy = TruePolicy(env.state_dim, env.action_dim)
-    rewards = []
-    if use_env:
-        state, _ = env.reset_t()
-        for _ in range(env.max_step):
-            action = policy.predict(state, deterministic=deterministic)
-            true_action = true_policy.predict(state, deterministic=deterministic)
-            state, reward, terminated, truncated, _ = env.step_t(true_action)
-            loss = (action - true_action).square().sum()
-            # logger.debug(
-            #     f"action: {action.item():.2f}, true_action: {true_action.item():.2f}, loss: {loss.item():.2f}"
-            # )
-            rewards.append(-loss)
-            if terminated or truncated:
-                break
-        episode_return = sum(rewards) / len(rewards)
-        return episode_return
-    else:
-        for _ in range(50):
-            state = t.randn(env.state_dim).exp()
-            action = policy.predict(state, deterministic=deterministic)
-            true_action = true_policy.predict(state, deterministic=deterministic)
-            loss = (action - true_action).square().sum()
-            rewards.append(-loss)
-        episode_return = sum(rewards) / len(rewards)
-        return episode_return
 
 
 @typed
@@ -264,7 +207,9 @@ def fit_mlp_policy(
     n_epochs: int = 1000,
     batch_size: int = 1,
     lr: float = 1e-3,
-    rollout_fn: Callable[[SFTPolicy, DiffStockTradingEnv], Float[TT, ""]] = rollout,
+    rollout_fn: Callable[
+        [SFTPolicy, DiffStockTradingEnv, int, int], Float[TT, ""]
+    ] = rollout,
     init_from: str | None = None,
     polyak_average: bool = False,
     eval_interval: int = 5,
@@ -272,7 +217,6 @@ def fit_mlp_policy(
     langevin_coef: float = 0.0,
     val_env_factory: Callable[[], DiffStockTradingEnv] | None = None,
     val_period: int = 10,
-    momentum: float = 0.9,
     prior_std: float = 1e9,
     dropout_rate: float = 0.0,
 ):
@@ -297,11 +241,9 @@ def fit_mlp_policy(
         last_avg_return = float("-inf")
         last_avg_ema = 0.0
 
-    # opt = t.optim.Adam(policy.parameters(), lr=lr)
     opt = CautiousAdamW(
         policy.parameters(),
         lr=lr,
-        # momentum=momentum,
     )
 
     scheduler = t.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=0.95)

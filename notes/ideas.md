@@ -1,3 +1,5 @@
+- add critic model, to be able to judge quality of state without completing full pass
+- add safe policy, and then during rollouts use it every $N$ steps for $M$ steps (e.g. every 100 for 10). safe policy will just return the state to something reasonable, e.g. uniform distribution between all stocks and cash. also cut gradients after safe policy is used, then one sub-episode of target + safe policy can be used for updates, and there will be no (well, less) gradient explosion and also no problems with getting stuck at boundaries, etc.
 - correlation between wealth and alpha
 - other features to use by agents
 - mech interp:
