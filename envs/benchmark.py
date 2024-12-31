@@ -101,7 +101,7 @@ class PredictableEnv(DiffStockTradingEnv):
     ):
         assert tech_per_stock > 0
         price_array, tech_array = cls.build_arrays(n_steps, n_stocks, tech_per_stock)
-        instance = cls(price_array, tech_array, initial_cash_ratio=0.5)
+        instance = cls.build(price_array, tech_array, initial_cash_ratio=0.5)
         instance.tech_per_stock = tech_per_stock
         instance.n_steps = n_steps
         instance.regenerate = regenerate
