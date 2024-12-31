@@ -143,6 +143,7 @@ class MLPPolicy(SFTPolicy):
                 nn.init.zeros_(layer.bias)
         self.head = nn.Linear(last_dim, output_dim)
         nn.init.normal_(self.head.weight, std=1e-9)
+        nn.init.zeros_(self.head.bias)
 
     @typed
     def action_distribution(self, state) -> Distribution:

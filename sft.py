@@ -21,34 +21,34 @@ stocks_test = t.tensor(np.load("stocks_test.npy"), dtype=t.float32)
 tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 
 
-def train_env(**kwargs):
-    return TrendFollowingEnv.create(
-        n_stocks=1, tech_per_stock=1, n_steps=1000, regenerate=False
-    )
-
-
-def val_env(**kwargs):
-    return TrendFollowingEnv.create(
-        n_stocks=1, tech_per_stock=1, n_steps=1000, regenerate=False
-    )
-
-
-def demo_env(**kwargs):
-    return TrendFollowingEnv.create(
-        n_stocks=1, tech_per_stock=1, n_steps=200, regenerate=False
-    )
-
-
 # def train_env(**kwargs):
-#     return DiffStockTradingEnv(stocks_old, tech_old)
+#     return TrendFollowingEnv.create(
+#         n_stocks=1, tech_per_stock=1, n_steps=1000, regenerate=False
+#     )
 
 
 # def val_env(**kwargs):
-#     return DiffStockTradingEnv(stocks_new, tech_new)
+#     return TrendFollowingEnv.create(
+#         n_stocks=1, tech_per_stock=1, n_steps=1000, regenerate=False
+#     )
 
 
 # def demo_env(**kwargs):
-#     return DiffStockTradingEnv(stocks_new, tech_new)
+#     return TrendFollowingEnv.create(
+#         n_stocks=1, tech_per_stock=1, n_steps=200, regenerate=False
+#     )
+
+
+def train_env(**kwargs):
+    return DiffStockTradingEnv(stocks_old, tech_old)
+
+
+def val_env(**kwargs):
+    return DiffStockTradingEnv(stocks_new, tech_new)
+
+
+def demo_env(**kwargs):
+    return DiffStockTradingEnv(stocks_new, tech_new)
 
 
 env_name = "predictable"
@@ -61,11 +61,11 @@ def train():
         val_period=5,
         n_epochs=1000,
         batch_size=1,
-        lr=1e-4,
+        lr=1e-8,
         rollout_fn=rollout,
         polyak_average=True,
         max_weight=10.0,
-        langevin_coef=1e-4,
+        langevin_coef=0.0,  # 1e-4,
         prior_std=10.0,
         dropout_rate=0.9,
         # init_from="checkpoints/good.pth",
