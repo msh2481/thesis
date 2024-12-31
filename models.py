@@ -141,13 +141,8 @@ class MLPPolicy(SFTPolicy):
             if isinstance(layer, nn.Linear):
                 nn.init.orthogonal_(layer.weight)
                 nn.init.zeros_(layer.bias)
-        self.mu_head = nn.Linear(last_dim, output_dim)
-        self.sigma_head = nn.Linear(last_dim, output_dim)
-
-        nn.init.normal_(self.mu_head.weight, std=1e-9)
-        nn.init.zeros_(self.mu_head.bias)
-        nn.init.normal_(self.sigma_head.weight, std=1e-9)
-        self.sigma_head.bias.data.fill_(-10.0)
+        self.head = nn.Linear(last_dim, output_dim)
+        nn.init.normal_(self.head.weight, std=1e-9)
 
     @typed
     def action_distribution(self, state) -> Distribution:
@@ -168,9 +163,8 @@ class MLPPolicy(SFTPolicy):
                     state.unsqueeze(0)
                 ).squeeze(0)
             x = self.backbone(state_normalized)
-            mu = self.mu_head(x)
-            sigma = F.softplus(self.sigma_head(x)) + 1e-9
-            return t.distributions.Normal(mu, sigma)
+            mu = self.head(x)
+            return t.distributions.Normal(mu, 1e-3)
         except ValueError as e:
             x = state
             logger.warning(f"x: {x.norm()}")
@@ -178,8 +172,7 @@ class MLPPolicy(SFTPolicy):
                 x = layer(x)
                 logger.warning(f"Layer: {type(layer)} x: {x.norm()}")
             logger.warning(f"State: {state}")
-            logger.warning(f"mu: {mu}")
-            logger.warning(f"sigma: {sigma}")
+            logger.warning(f"Output: {mu}")
             raise e
 
 
