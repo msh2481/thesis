@@ -289,8 +289,10 @@ def fit_mlp_policy(
 
     # Initialize average state dict if needed
     avg_state = None
+    prev_state = None
     if polyak_average:
         avg_state = policy.state_dict()
+        prev_state = policy.state_dict()  # Initialize prev_state
         avg_returns = []
         avg_returns_ema = []
         avg_current_ema = 0.0
@@ -420,14 +422,23 @@ def fit_mlp_policy(
             with t.no_grad():
                 current_state = policy.state_dict()
                 for key in avg_state:
-                    delta = current_state[key] - avg_state[key]
-                    avg_state[key] = avg_state[key] + delta / (it + 1)
-                # Copy current model's normalizer stats to avg_state
-                avg_state["normalizer.mean"] = current_state["normalizer.mean"].clone()
-                avg_state["normalizer.M2"] = current_state["normalizer.M2"].clone()
-                avg_state["normalizer.count"] = current_state[
-                    "normalizer.count"
-                ].clone()
+                    if key.startswith("normalizer"):
+                        # Copy current model's normalizer stats directly
+                        avg_state[key] = current_state[key].clone()
+                        continue
+
+                    n = t.tensor(it + 1, dtype=t.float32)
+                    alpha_avg = 0.5  # Hyperparameter for adaptive weighted averaging
+
+                    # Implement the adaptive weighted averaging formula
+                    term1 = (n / (n + 1)) * avg_state[key]
+                    term2 = ((1 - (n + 1) ** alpha_avg) / (n + 1)) * prev_state[key]
+                    term3 = (n + 1) ** (alpha_avg - 1) * current_state[key]
+
+                    avg_state[key] = term1 + term2 + term3
+
+                # Store current state for next iteration
+                prev_state = {k: v.clone() for k, v in current_state.items()}
 
         # Evaluate averaged model periodically
         if polyak_average and it % eval_interval == 0:
