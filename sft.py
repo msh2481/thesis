@@ -49,13 +49,13 @@ def train():
         val_period=5,
         n_epochs=1000,
         batch_size=1,
-        lr=1e-4,
+        lr=2e-4,
         rollout_fn=rollout,
         polyak_average=True,
         max_weight=10.0,
         langevin_coef=1e-6,
-        prior_std=1e9,
-        dropout_rate=0.95,
+        prior_std=1.0,
+        dropout_rate=0.9,
         # init_from="checkpoints/good.pth",
     )
 
@@ -63,7 +63,7 @@ def train():
 def demo(it: int, avg: bool):
     env = demo_env()
     steps = getattr(env, "n_steps", getattr(env, "max_step"))
-    policy = MLPPolicy(env.state_dim, env.action_dim, dropout_rate=0.95)
+    policy = MLPPolicy(env.state_dim, env.action_dim, dropout_rate=0.9)
     if avg:
         policy.load_state_dict(
             t.load(f"checkpoints/avg_policy_{it}.pth", weights_only=False)

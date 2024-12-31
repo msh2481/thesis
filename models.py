@@ -311,8 +311,7 @@ def fit_mlp_policy(
         # momentum=momentum,
     )
 
-    # Without scheduler for now (gamma = 1.0)
-    scheduler = t.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=1.0)
+    scheduler = t.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=0.95)
     pbar = tqdm(range(n_epochs))
     returns = []
     return_stds = []
@@ -330,6 +329,7 @@ def fit_mlp_policy(
     val_avg_current_ema = 0.0
 
     env = env_factory()
+    current_lr = lr
 
     for it in pbar:
         episode_returns = []
@@ -346,6 +346,7 @@ def fit_mlp_policy(
         pbar_info = {
             "cur": f"{mean_return.item():.3f}",
             "ema": f"{current_ema:.3f}",
+            "lr": f"{current_lr:.2e}",
         }
         if polyak_average:
             pbar_info.update(
@@ -408,8 +409,13 @@ def fit_mlp_policy(
 
         opt.step()
         scheduler.step()
+        current_lrs = scheduler.get_last_lr()
+        assert (
+            max(current_lrs) - min(current_lrs) < 1e-6
+        ), "Learning rate is not constant"
+        current_lr = current_lrs[0]
 
-        C = langevin_coef * ((2 * lr) ** 0.5)
+        C = langevin_coef * ((2 * current_lr) ** 0.5)
         for p in policy.parameters():
             p.data.add_(C * t.randn_like(p.data))
 
