@@ -301,7 +301,7 @@ def fit_mlp_policy(
         last_avg_ema = 0.0
 
     # opt = t.optim.Adam(policy.parameters(), lr=lr)
-    opt = CautiousLion(
+    opt = CautiousAdamW(
         policy.parameters(),
         lr=lr,
         # momentum=momentum,
