@@ -49,13 +49,14 @@ def train():
         val_period=5,
         n_epochs=1000,
         batch_size=1,
-        lr=1e-6,
+        lr=1e-4,
         rollout_fn=rollout,
         polyak_average=True,
         max_weight=10.0,
-        langevin_coef=1e-3,
-        momentum=0.99,
-        weight_decay=1e-3,
+        langevin_coef=1e-6,
+        # momentum=0.99,
+        prior_std=1e9,
+        dropout_rate=0.0,
         # init_from="checkpoints/good.pth",
     )
 

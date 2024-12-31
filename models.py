@@ -9,6 +9,7 @@ from envs.diff_stock_trading_env import DiffStockTradingEnv
 from jaxtyping import Float, Int
 from loguru import logger
 from matplotlib import pyplot as plt
+from optimizers import CautiousAdamW, CautiousLion, CautiousSGD
 from torch import nn, Tensor as TT
 from torch.distributions import Distribution
 from torch.nn import functional as F
@@ -118,15 +119,23 @@ class PolyakNormalizer(nn.Module):
 
 
 class MLPPolicy(SFTPolicy):
-    def __init__(self, input_dim: int, output_dim: int, dims: list[int] = [128, 128]):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        dims: list[int] = [128, 128],
+        dropout_rate: float = 0.0,
+    ):
         super().__init__()
         self.normalizer = PolyakNormalizer(input_dim)
         layers = []
         last_dim = input_dim
         for dim in dims:
+            if dropout_rate > 0:
+                layers.append(nn.Dropout(dropout_rate))
             layers.append(nn.Linear(last_dim, dim))
             layers.append(nn.ReLU())
-            layers.append(nn.LayerNorm(dim))
+            # layers.append(nn.LayerNorm(dim))
             last_dim = dim
         self.backbone = nn.Sequential(*layers)
         for layer in layers:
@@ -274,14 +283,15 @@ def fit_mlp_policy(
     val_env_factory: Callable[[], DiffStockTradingEnv] | None = None,
     val_period: int = 10,
     momentum: float = 0.9,
-    weight_decay: float = 0.0,
+    prior_std: float = 1e9,
+    dropout_rate: float = 0.0,
 ):
     # Get dimensions once from a temporary environment
     tmp_env = env_factory()
     state_dim, action_dim = tmp_env.state_dim, tmp_env.action_dim
     del tmp_env
 
-    policy = MLPPolicy(state_dim, action_dim)
+    policy = MLPPolicy(state_dim, action_dim, dropout_rate=dropout_rate)
     if init_from is not None:
         policy.load_state_dict(t.load(init_from, weights_only=False))
 
@@ -296,11 +306,10 @@ def fit_mlp_policy(
         last_avg_ema = 0.0
 
     # opt = t.optim.Adam(policy.parameters(), lr=lr)
-    opt = t.optim.SGD(
+    opt = CautiousLion(
         policy.parameters(),
         lr=lr,
-        momentum=momentum,
-        weight_decay=weight_decay,
+        # momentum=momentum,
     )
 
     # Without scheduler for now (gamma = 1.0)
@@ -361,7 +370,10 @@ def fit_mlp_policy(
         pbar.set_postfix(**pbar_info)
 
         opt.zero_grad()
-        (-mean_return).backward()
+        regularization = 0.0
+        for p in policy.parameters():
+            regularization += (p / prior_std).square().sum()
+        (regularization - mean_return).backward()
 
         # Gradient normalization
         sum_of_squares = t.tensor(1.0)
@@ -421,7 +433,7 @@ def fit_mlp_policy(
 
         # Evaluate averaged model periodically
         if polyak_average and it % eval_interval == 0:
-            avg_policy = MLPPolicy(state_dim, action_dim)
+            avg_policy = MLPPolicy(state_dim, action_dim, dropout_rate=dropout_rate)
             avg_policy.load_state_dict(avg_state)
             avg_policy.eval()
 
@@ -466,7 +478,7 @@ def fit_mlp_policy(
 
             # Evaluate averaged policy if using Polyak averaging
             if polyak_average:
-                avg_policy = MLPPolicy(state_dim, action_dim)
+                avg_policy = MLPPolicy(state_dim, action_dim, dropout_rate=dropout_rate)
                 avg_policy.load_state_dict(avg_state)
                 avg_policy.eval()
                 val_avg_episode_returns = []
@@ -548,7 +560,7 @@ def fit_mlp_policy(
 
     # Return final averaged policy if using Polyak averaging, otherwise return current policy
     if polyak_average:
-        final_policy = MLPPolicy(state_dim, action_dim)
+        final_policy = MLPPolicy(state_dim, action_dim, dropout_rate=dropout_rate)
         final_policy.load_state_dict(avg_state)
         return final_policy
     return policy
