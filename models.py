@@ -131,8 +131,7 @@ class MLPPolicy(SFTPolicy):
         layers = []
         last_dim = input_dim
         for dim in dims:
-            if dropout_rate > 0:
-                layers.append(nn.Dropout(dropout_rate))
+            layers.append(nn.Dropout(dropout_rate))
             layers.append(nn.Linear(last_dim, dim))
             layers.append(nn.ReLU())
             # layers.append(nn.LayerNorm(dim))
@@ -436,7 +435,6 @@ def fit_mlp_policy(
             avg_policy = MLPPolicy(state_dim, action_dim, dropout_rate=dropout_rate)
             avg_policy.load_state_dict(avg_state)
             avg_policy.eval()
-
             avg_episode_returns = []
             for _ in range(batch_size):
                 avg_return = rollout_fn(avg_policy, env)
