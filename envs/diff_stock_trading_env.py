@@ -12,14 +12,14 @@ from torch import Tensor as TT
 
 TMoney: TypeAlias = Float[TT, ""]
 TReward: TypeAlias = Float[TT, ""]
-TQuantityVec: TypeAlias = Int[TT, "stock_dim"]
+TQuantityVec: TypeAlias = Float[TT, "stock_dim"]
 TPriceVec: TypeAlias = Float[TT, "stock_dim"]
 TActionVec: TypeAlias = Float[TT, "stock_dim"]
 TStateVec: TypeAlias = Float[TT, "state_dim"]
 
 
 @typed
-def soft_greater(x: Float[TT, ""], threshold: float) -> Float[TT, ""]:
+def soft_greater(x: Float[TT, "..."], threshold: float) -> Float[TT, "..."]:
     return (threshold - x).relu().square()
 
 
@@ -31,38 +31,29 @@ class DiffStockTradingEnv(gym.Env):
         self,
         price_array: Float[TT, "time_dim stock_dim"],
         tech_array: Float[TT, "time_dim tech_dim"],
-        max_stock: int = 100,
-        initial_capital: TMoney | None = None,
-        initial_cash_ratio: float = 0.5,
-        buy_cost_pct: float = 1e-3,
-        sell_cost_pct: float = 1e-3,
-        initial_stocks: TQuantityVec | int = 100,
+        max_stock: int,
+        initial_capital: TMoney | None,
+        initial_cash_ratio: float,
+        buy_cost_pct: float,
+        sell_cost_pct: float,
+        initial_stocks: TQuantityVec,
     ) -> None:
-        """Initialize the stock trading environment."""
+        """Initialize environment configuration (not the state)."""
         self.price_array = price_array
-        self.stock_dim = self.price_array.shape[1]
         self.tech_array = tech_array
+        self.stock_dim = self.price_array.shape[1]
         self.tech_dim = self.tech_array.shape[1]
-
         self.max_stock = max_stock
-        self.buy_cost_pct = buy_cost_pct
-        self.sell_cost_pct = sell_cost_pct
-        self.initial_stocks = (
-            initial_stocks
-            if not isinstance(initial_stocks, int)
-            else t.full((self.stock_dim,), initial_stocks)
-        ).float()
         self.initial_capital = initial_capital
         self.initial_cash_ratio = initial_cash_ratio
-        self.penalty_sum = 0.0
+        self.buy_cost_pct = buy_cost_pct
+        self.sell_cost_pct = sell_cost_pct
+        self.initial_stocks = initial_stocks
 
         self.state_dim = 2 + 3 * self.stock_dim + self.tech_dim
-        # Environment state variables
-        self.reset()
-
-        self.env_name = "DiffStockTradingEnv"
         self.action_dim = self.stock_dim
         self.max_step = self.price_array.shape[0] - 1
+        self.env_name = "DiffStockTradingEnv"
 
         self.observation_space = gym.spaces.Box(
             low=-1e18, high=1e18, shape=(self.state_dim,), dtype=np.float32
@@ -77,8 +68,12 @@ class DiffStockTradingEnv(gym.Env):
         super().reset(seed=seed)
         self.time = 0
         self.penalty_sum = 0.0
-        current_price = self.price_array[self.time]
+
+        # Initialize stocks
         self.stocks = self.initial_stocks.clone()
+
+        # Initialize cash
+        current_price = self.price_array[self.time]
         stock_value = (current_price * self.stocks).sum()
         if self.initial_capital is None:
             r = self.initial_cash_ratio
@@ -87,9 +82,58 @@ class DiffStockTradingEnv(gym.Env):
             assert abs(self.cash / (self.cash + stock_value) - r) < 1e-6
         else:
             self.cash = self.initial_capital
-        self.last_log_total_asset = self._get_log_total_asset(current_price)
 
+        self.last_log_total_asset = self._get_log_total_asset(current_price)
         return self._get_state(current_price), {}
+
+    @classmethod
+    @typed
+    def build(
+        cls,
+        price_array: Float[TT, "time_dim stock_dim"],
+        tech_array: Float[TT, "time_dim tech_dim"],
+        max_stock: int = 100,
+        initial_capital: TMoney | None = None,
+        initial_cash_ratio: float = 0.5,
+        buy_cost_pct: float = 1e-3,
+        sell_cost_pct: float = 1e-3,
+        initial_stocks: TQuantityVec | int = 100,
+    ) -> "DiffStockTradingEnv":
+        """User-facing factory method to create the environment."""
+        if isinstance(initial_stocks, int):
+            initial_stocks = t.full((price_array.shape[1],), initial_stocks).float()
+
+        env = cls(
+            price_array=price_array,
+            tech_array=tech_array,
+            max_stock=max_stock,
+            initial_capital=initial_capital,
+            initial_cash_ratio=initial_cash_ratio,
+            buy_cost_pct=buy_cost_pct,
+            sell_cost_pct=sell_cost_pct,
+            initial_stocks=initial_stocks,
+        )
+        env.reset_t()
+        return env
+
+    @typed
+    def subsegment(self, l: int, r: int) -> "DiffStockTradingEnv":
+        """Returns a new environment based on the [l, r] subsegment of the original one."""
+        assert (
+            0 <= l <= r < self.price_array.shape[0]
+        ), f"Invalid segment indices: [{l}, {r}]"
+        env = DiffStockTradingEnv(
+            price_array=self.price_array[l : r + 1],
+            tech_array=self.tech_array[l : r + 1],
+            max_stock=self.max_stock,
+            initial_capital=self.cash,  # Use current cash as initial capital
+            initial_cash_ratio=self.initial_cash_ratio,
+            buy_cost_pct=self.buy_cost_pct,
+            sell_cost_pct=self.sell_cost_pct,
+            initial_stocks=self.stocks.clone(),  # Use current stocks as initial
+        )
+        env.reset_t()
+        return env
 
     @typed
     def _get_reward(self, actions: TActionVec, price: TPriceVec) -> TReward:
@@ -112,7 +156,7 @@ class DiffStockTradingEnv(gym.Env):
         scale_penalty = self._execute_actions(actions)
 
         penalty = self._get_penalty() + scale_penalty
-        truncated = self.penalty_sum > 10.0
+        truncated = self.penalty_sum > 100.0
         self.penalty_sum += penalty.item()
         reward = self._get_reward(actions, price) - penalty
         self.last_log_total_asset = self._get_log_total_asset(price)
@@ -171,7 +215,11 @@ class DiffStockTradingEnv(gym.Env):
     @typed
     def _get_penalty(self) -> TReward:
         cash_ratio = self._get_cash_ratio(self.price_array[self.time])
-        penalty = soft_greater(cash_ratio, 0.1) + soft_greater(1 - cash_ratio, 0.1)
+        penalty = (
+            soft_greater(cash_ratio, 0.1)
+            + soft_greater(1 - cash_ratio, 0.1)
+            + soft_greater(self.stocks, 0.1).sum()
+        )
         return penalty
 
     @typed
