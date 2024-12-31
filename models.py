@@ -219,9 +219,6 @@ def rollout(
         rewards.append(reward)
         if terminated or truncated:
             break
-        if total_penalty > max(total_reward, 0.1):
-            # logger.warning(f"Penalty: {total_penalty}")
-            break
     episode_return = sum(rewards)
     return episode_return
 
@@ -272,7 +269,7 @@ def fit_mlp_policy(
     polyak_average: bool = False,
     eval_interval: int = 5,
     max_weight: float = 10.0,
-    langevin_coef: float = 1e-3,
+    langevin_coef: float = 0.0,
     val_env_factory: Callable[[], DiffStockTradingEnv] | None = None,
     val_period: int = 10,
     momentum: float = 0.9,
@@ -453,10 +450,11 @@ def fit_mlp_policy(
             avg_mean_return = (sum(avg_episode_returns) / batch_size).clamp(-100, None)
             last_avg_return = avg_mean_return.item()
             avg_returns.append(last_avg_return)
-            for _ in range(eval_interval):
-                avg_current_ema = (
-                    alpha * avg_current_ema + (1 - alpha) * avg_mean_return
-                )
+            if avg_mean_return.isfinite().all():
+                for _ in range(eval_interval):
+                    avg_current_ema = (
+                        alpha * avg_current_ema + (1 - alpha) * avg_mean_return
+                    )
             last_avg_ema = avg_current_ema.item()
             avg_returns_ema.append(last_avg_ema)
 
@@ -465,7 +463,8 @@ def fit_mlp_policy(
                 t.save(avg_state, f"checkpoints/avg_policy_{it}.pth")
 
         returns.append(mean_return.item())
-        current_ema = alpha * current_ema + (1 - alpha) * mean_return.item()
+        if mean_return.isfinite().all():
+            current_ema = alpha * current_ema + (1 - alpha) * mean_return.item()
         returns_ema.append(current_ema)
         return_stds.append(std_return.item())
         gradients.append(normalization_constant.item())
@@ -481,7 +480,10 @@ def fit_mlp_policy(
                 val_episode_returns.append(val_return)
             val_mean_return = (sum(val_episode_returns) / batch_size).clamp(-100, None)
             val_returns.append(val_mean_return.item())
-            val_current_ema = alpha * val_current_ema + (1 - alpha) * val_mean_return
+            if val_mean_return.isfinite().all():
+                val_current_ema = (
+                    alpha * val_current_ema + (1 - alpha) * val_mean_return
+                )
             val_returns_ema.append(val_current_ema.item())
             policy.train()
 
@@ -498,9 +500,10 @@ def fit_mlp_policy(
                     -100, None
                 )
                 val_avg_returns.append(val_avg_mean_return.item())
-                val_avg_current_ema = (
-                    alpha * val_avg_current_ema + (1 - alpha) * val_avg_mean_return
-                )
+                if val_avg_mean_return.isfinite().all():
+                    val_avg_current_ema = (
+                        alpha * val_avg_current_ema + (1 - alpha) * val_avg_mean_return
+                    )
                 val_avg_returns_ema.append(val_avg_current_ema.item())
 
         if it % eval_interval == 0:

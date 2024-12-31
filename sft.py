@@ -114,7 +114,7 @@ def demo(it: int, avg: bool):
     cash_div_prices = state[1 + 3 * n_stocks + 1 :]  # n_stocks
 
     for _ in range(steps):
-        action = policy.predict(state, deterministic=True)
+        action = policy.predict(state)
         state, reward, terminated, truncated, info = env.step_t(action)
 
         # Destructure new state

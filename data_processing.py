@@ -492,9 +492,9 @@ def test_2():
 
 def load_data():
     # Get stocks from Dow Jones
-    tickers = pd.read_html("https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average")
-    tickers = tickers[2]["Symbol"].tolist()
-    # tickers = ["AAPL", "GOOGL"]
+    # tickers = pd.read_html("https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average")
+    # tickers = tickers[2]["Symbol"].tolist()
+    tickers = ["AAPL", "MSFT", "NVDA"]
     splits = [
         ("2009-01-01", "2020-01-01", "old"),
         ("2020-01-01", "2022-01-01", "new"),
