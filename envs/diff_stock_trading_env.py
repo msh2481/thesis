@@ -112,12 +112,13 @@ class DiffStockTradingEnv(gym.Env):
         self.flat = flat
         self.env_name = "DiffStockTradingEnv"
 
-        self.state, _ = self.reset()
+        self.state, _ = self.reset_state()
+        self.state_shape = self.state.features(numpy=self.numpy, flat=self.flat).shape
 
         self.observation_space = gym.spaces.Box(
             low=-1e18,
             high=1e18,
-            shape=self.state.shape,
+            shape=self.state_shape,
             dtype=np.float32,
         )
         self.action_space = gym.spaces.Box(

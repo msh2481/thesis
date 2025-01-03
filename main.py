@@ -10,7 +10,7 @@ from envs.benchmark import (
 )
 from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
-from models import fit_mlp_policy, MLPPolicy, rollout
+from models import fit_policy, MLPPolicy, rollout
 from tqdm import tqdm
 
 stocks_new = t.tensor(np.load("stocks_new.npy"), dtype=t.float32)
@@ -59,7 +59,7 @@ def demo_env(**kwargs):
 
 
 def train():
-    model = fit_mlp_policy(
+    model = fit_policy(
         env_factory=train_env,
         val_env_factory=val_env,
         val_period=5,

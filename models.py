@@ -16,30 +16,12 @@ from torch.nn import functional as F
 from tqdm.auto import tqdm
 
 
-class SFTPolicy(nn.Module, ABC):
-    def __init__(self):
-        super().__init__()
-
-    @abstractmethod
-    def action_distribution(self, state) -> Distribution:
-        raise NotImplementedError()
-
-    @typed
-    def predict(
-        self, state: Float[TT, "state_dim"], deterministic: bool = False
-    ) -> Float[TT, "action_dim"]:
-        dist = self.action_distribution(state)
-        if deterministic:
-            return dist.mode
-        else:
-            return dist.rsample()
-
-
 class PolyakNormalizer(nn.Module):
-    def __init__(self, n_features: int):
+    def __init__(self, shape: tuple[int, ...]):
         super().__init__()
-        self.register_buffer("mean", t.zeros(n_features))
-        self.register_buffer("M2", t.zeros(n_features))  # Second moment around mean
+        self.register_buffer("mean", t.zeros(shape))
+        # Second moment around mean
+        self.register_buffer("M2", t.zeros(shape))
         self.register_buffer("count", t.tensor(0.0))
 
     @property
@@ -51,10 +33,10 @@ class PolyakNormalizer(nn.Module):
         )
 
     @typed
-    def partial_fit(self, batch: Float[TT, "batch_size n_features"]) -> None:
+    def partial_fit(self, batch: Float[TT, "batch_size ..."]) -> None:
         # Drop samples with nan
         initial_size = batch.size(0)
-        batch = batch[~t.isnan(batch).any(dim=1)]
+        batch = batch[~t.isnan(batch).any(dim=tuple(range(1, batch.ndim)))]
         new_size = batch.size(0)
         if new_size < initial_size:
             logger.warning(f"Dropped {initial_size - new_size} samples with NaN")
@@ -82,32 +64,52 @@ class PolyakNormalizer(nn.Module):
 
     @typed
     def transform(
-        self, batch: Float[TT, "batch_size n_features"]
-    ) -> Float[TT, "batch_size n_features"]:
+        self, batch: Float[TT, "batch_size ..."]
+    ) -> Float[TT, "batch_size ..."]:
         return (batch - self.mean.unsqueeze(0)) / (self.std.unsqueeze(0))
 
     @typed
     def fit_transform(
-        self, batch: Float[TT, "batch_size n_features"]
-    ) -> Float[TT, "batch_size n_features"]:
+        self, batch: Float[TT, "batch_size ..."]
+    ) -> Float[TT, "batch_size ..."]:
         self.partial_fit(batch)
         return self.transform(batch)
 
 
-class MLPPolicy(SFTPolicy):
+class EMA:
+    def __init__(self, alpha: float):
+        self.alpha = alpha
+        self.values = {}
+
+    def update(self, key: str, value: Float[TT, ""]) -> None:
+        self.values[key] = self.alpha * self[key] + (1 - self.alpha) * value
+
+    def __getitem__(self, key: str) -> Float[TT, ""]:
+        return self.values.get(key, t.zeros(()))
+
+
+def product(shape: tuple[int, ...]) -> int:
+    result = 1
+    for dim in shape:
+        result *= dim
+    return result
+
+
+class MLPPolicy(nn.Module):
     def __init__(
         self,
-        input_dim: int,
+        input_shape: tuple[int, ...],
         output_dim: int,
         dims: list[int] = [128, 128],
         dropout_rate: float = 0.0,
     ):
         super().__init__()
-        self.normalizer = PolyakNormalizer(input_dim)
+        self.normalizer = PolyakNormalizer(input_shape)
+        self.register_buffer("dropout_rate", t.tensor(dropout_rate))
         layers = []
-        last_dim = input_dim
+        last_dim = product(input_shape)
         for dim in dims:
-            layers.append(nn.Dropout(dropout_rate))
+            layers.append(nn.Dropout(self.dropout_rate))
             layers.append(nn.Linear(last_dim, dim))
             layers.append(nn.ReLU())
             # layers.append(nn.LayerNorm(dim))
@@ -121,8 +123,14 @@ class MLPPolicy(SFTPolicy):
         nn.init.normal_(self.head.weight, std=1e-9)
         nn.init.zeros_(self.head.bias)
 
+        logger.info(
+            f"MLPPolicy initialized with input shape = {input_shape} and #parameters = {sum(p.numel() for p in self.parameters())}"
+        )
+
     @typed
-    def action_distribution(self, state) -> Distribution:
+    def predict(
+        self, state: Float[TT, "..."], noise_level: float
+    ) -> Float[TT, "output_dim"]:
         with t.no_grad():
             for p in self.parameters():
                 if t.isnan(p.data).any():
@@ -130,27 +138,18 @@ class MLPPolicy(SFTPolicy):
                     p.data = t.where(t.isnan(p.data), t.zeros_like(p.data), p.data)
                 p.data.clamp_(-10, 10)
 
-        try:
-            if self.training:
-                state_normalized = self.normalizer.fit_transform(
-                    state.unsqueeze(0)
-                ).squeeze(0)
-            else:
-                state_normalized = self.normalizer.transform(
-                    state.unsqueeze(0)
-                ).squeeze(0)
-            x = self.backbone(state_normalized)
-            mu = self.head(x)
-            return t.distributions.Normal(mu, 1e-3)
-        except ValueError as e:
-            x = state
-            logger.warning(f"x: {x.norm()}")
-            for layer in self.backbone:
-                x = layer(x)
-                logger.warning(f"Layer: {type(layer)} x: {x.norm()}")
-            logger.warning(f"State: {state}")
-            logger.warning(f"Output: {mu}")
-            raise e
+        if self.training:
+            state_normalized = self.normalizer.fit_transform(
+                state.unsqueeze(0)
+            ).squeeze(0)
+        else:
+            state_normalized = self.normalizer.transform(state.unsqueeze(0)).squeeze(0)
+        flat_state = state_normalized.flatten()
+        x = self.backbone(flat_state)
+        logits = self.head(x)
+        unnormalized_position = (logits + noise_level * t.randn_like(logits)).exp()
+        position = unnormalized_position / (unnormalized_position.sum() + 1)
+        return position
 
 
 def test_gradients():
@@ -159,7 +158,7 @@ def test_gradients():
     opt = t.optim.Adam(policy.parameters(), lr=1e-3)
     state = t.randn(2)
     # test stochastic
-    action = policy.predict(state, deterministic=False)
+    action = policy.predict(state, noise_level=1.0)
     print(action)
     loss = action.sum()
     loss.backward()
@@ -167,7 +166,7 @@ def test_gradients():
     print(policy.sigma_head.weight.grad.flatten()[:10])
     opt.zero_grad()
     # test deterministic
-    action = policy.predict(state, deterministic=True)
+    action = policy.predict(state, noise_level=0.0)
     print(action)
     loss = action.sum()
     loss.backward()
@@ -177,18 +176,18 @@ def test_gradients():
 
 @typed
 def rollout(
-    policy: SFTPolicy,
+    policy: MLPPolicy,
     env: DiffStockTradingEnv,
-    deterministic: bool = False,
+    noise_level: float,
 ) -> Float[TT, ""]:
     state, _ = env.reset_state()
-    zero_with_gradients = policy.predict(state).sum() * 0
+    zero_with_gradients = policy.predict(state, noise_level).sum() * 0
     rewards = [zero_with_gradients]
     total_reward = 0
     total_penalty = 0
 
     for step in range(env.max_step):
-        action = policy.predict(state, deterministic=deterministic)
+        action = policy.predict(state, noise_level)
         state, reward, terminated, truncated, _ = env.make_step(action)
         penalty = env._get_penalty()
         total_reward += reward.item()
@@ -202,13 +201,90 @@ def rollout(
 
 
 @typed
-def fit_mlp_policy(
+def plot_returns(
+    returns: list[float],
+    returns_ema: list[float],
+    return_stds: list[float],
+    gradients: list[float],
+    val_returns: list[float] | None = None,
+    val_returns_ema: list[float] | None = None,
+    val_period: int = 5,
+    eval_interval: int = 1,
+    avg_returns: list[float] | None = None,
+    avg_returns_ema: list[float] | None = None,
+    val_avg_returns: list[float] | None = None,
+    val_avg_returns_ema: list[float] | None = None,
+) -> None:
+    """Plot training and validation returns."""
+    l = t.tensor(returns) - t.tensor(return_stds)
+    r = t.tensor(returns) + t.tensor(return_stds)
+    plt.close()
+    plt.clf()
+
+    n_plots = 3 if val_returns else 2
+
+    plt.figure(figsize=(10, 10))
+    # Training returns plot
+    plt.subplot(n_plots, 1, 1)
+    plt.title("Training Returns")
+    plt.axhline(0, color="k", linestyle="--")
+    plt.grid(True, which="major", alpha=0.5)
+    plt.grid(True, which="minor", alpha=0.1)
+    plt.minorticks_on()
+    plt.gca().yaxis.set_minor_locator(plt.MultipleLocator(0.1))
+    plt.fill_between(range(len(returns)), l, r, alpha=0.2, color="red")
+    plt.plot(returns, "r-", lw=0.5, label="Current Policy")
+    plt.plot(returns_ema, "r--", label="Current EMA")
+    if avg_returns is not None:
+        eval_x = list(range(0, len(returns), eval_interval))
+        plt.plot(eval_x, avg_returns, "b-", lw=0.5, label="Polyak Average")
+        plt.plot(eval_x, avg_returns_ema, "b--", label="Polyak EMA")
+    plt.legend()
+    returns_95 = t.quantile(t.tensor(returns), 0.95)
+    returns_5 = t.quantile(t.tensor(returns), 0.05)
+    plt.ylim(returns_5 - 0.1, returns_95 + 0.1)
+
+    # Gradient plot
+    plt.subplot(n_plots, 1, 2)
+    plt.title("Gradient Norms")
+    plt.plot(gradients)
+    plt.yscale("log")
+    plt.grid(True, which="major", alpha=0.3)
+
+    # Validation returns plot if applicable
+    if val_returns:
+        plt.subplot(n_plots, 1, 3)
+        plt.title("Validation Returns")
+        plt.grid(True, which="major", alpha=0.5)
+        plt.grid(True, which="minor", alpha=0.1)
+        plt.minorticks_on()
+        plt.gca().yaxis.set_minor_locator(plt.MultipleLocator(0.1))
+        val_x = list(range(0, len(returns), val_period))
+        plt.plot(val_x, val_returns, "r-", lw=0.5, label="Current Policy")
+        plt.plot(val_x, val_returns_ema, "r--", label="Current EMA")
+        if val_avg_returns is not None:
+            plt.plot(val_x, val_avg_returns, "b-", lw=0.5, label="Polyak Average")
+            plt.plot(val_x, val_avg_returns_ema, "b--", label="Polyak EMA")
+        plt.legend()
+        if val_returns:
+            val_returns_95 = t.quantile(t.tensor(val_returns), 0.95)
+            val_returns_5 = t.quantile(t.tensor(val_returns), 0.05)
+            plt.ylim(val_returns_5 - 0.1, val_returns_95 + 0.1)
+        plt.axhline(0, color="k", linestyle="--")
+
+    plt.tight_layout()
+    plt.savefig("logs/info.png")
+    plt.close()
+
+
+@typed
+def fit_policy(
     env_factory: Callable[[], DiffStockTradingEnv],
     n_epochs: int = 1000,
     batch_size: int = 1,
     lr: float = 1e-3,
     rollout_fn: Callable[
-        [SFTPolicy, DiffStockTradingEnv, int, int], Float[TT, ""]
+        [MLPPolicy, DiffStockTradingEnv, int, int], Float[TT, ""]
     ] = rollout,
     init_from: str | None = None,
     polyak_average: bool = False,
@@ -222,24 +298,29 @@ def fit_mlp_policy(
 ):
     # Get dimensions once from a temporary environment
     tmp_env = env_factory()
-    state_dim, action_dim = tmp_env.state_dim, tmp_env.action_dim
+    state_shape, action_dim = tmp_env.state_shape, tmp_env.action_dim
     del tmp_env
 
-    policy = MLPPolicy(state_dim, action_dim, dropout_rate=dropout_rate)
+    policy_kwargs = {
+        "input_shape": state_shape,
+        "output_dim": action_dim,
+        "dropout_rate": dropout_rate,
+    }
+    policy = MLPPolicy(**policy_kwargs)
     if init_from is not None:
         policy.load_state_dict(t.load(init_from, weights_only=False))
+
+    ema = EMA(alpha=0.95)
 
     # Initialize average state dict if needed
     avg_state = None
     prev_state = None
     if polyak_average:
         avg_state = policy.state_dict()
-        prev_state = policy.state_dict()  # Initialize prev_state
+        prev_state = policy.state_dict()
         avg_returns = []
         avg_returns_ema = []
-        avg_current_ema = 0.0
         last_avg_return = float("-inf")
-        last_avg_ema = 0.0
 
     opt = CautiousAdamW(
         policy.parameters(),
@@ -251,8 +332,6 @@ def fit_mlp_policy(
     returns = []
     return_stds = []
     returns_ema = []
-    current_ema = t.zeros(())
-    alpha = 0.95
     gradients = []
 
     # Initialize validation tracking if needed
@@ -260,8 +339,6 @@ def fit_mlp_policy(
     val_returns_ema = []
     val_avg_returns = []
     val_avg_returns_ema = []
-    val_current_ema = t.zeros(())
-    val_avg_current_ema = t.zeros(())
 
     env = env_factory()
     current_lr = lr
@@ -280,26 +357,16 @@ def fit_mlp_policy(
 
         pbar_info = {
             "cur": f"{mean_return.item():.3f}",
-            "ema": f"{current_ema:.3f}",
+            "ema": f"{ema['cur']:3f}",
             "lr": f"{current_lr:.2e}",
+            "val_ema": f"{ema['val']:3f}",
+            "val_avg_ema": f"{ema['val_avg']:3f}",
         }
         if polyak_average:
             pbar_info.update(
                 {
                     "avg": f"{last_avg_return:.3f}",
-                    "avg_ema": f"{last_avg_ema:.3f}",
-                }
-            )
-        if val_returns:
-            pbar_info.update(
-                {
-                    "val_ema": f"{val_returns_ema[-1]:.3f}",
-                }
-            )
-        if val_avg_returns:
-            pbar_info.update(
-                {
-                    "val_avg_ema": f"{val_avg_returns_ema[-1]:.3f}",
+                    "avg_ema": f"{ema['avg']:3f}",
                 }
             )
         pbar.set_postfix(**pbar_info)
@@ -382,7 +449,7 @@ def fit_mlp_policy(
 
         # Evaluate averaged model periodically
         if polyak_average and it % eval_interval == 0:
-            avg_policy = MLPPolicy(state_dim, action_dim, dropout_rate=dropout_rate)
+            avg_policy = MLPPolicy(**policy_kwargs)
             avg_policy.load_state_dict(avg_state)
             avg_policy.eval()
             avg_episode_returns = []
@@ -394,11 +461,8 @@ def fit_mlp_policy(
             avg_returns.append(last_avg_return)
             if avg_mean_return.isfinite().all():
                 for _ in range(eval_interval):
-                    avg_current_ema = (
-                        alpha * avg_current_ema + (1 - alpha) * avg_mean_return
-                    )
-            last_avg_ema = avg_current_ema.item()
-            avg_returns_ema.append(last_avg_ema)
+                    ema.update("avg", avg_mean_return)
+            avg_returns_ema.append(ema["avg"].item())
 
             # Save averaged model checkpoint
             if it % eval_interval == 0:
@@ -406,8 +470,8 @@ def fit_mlp_policy(
 
         returns.append(mean_return.item())
         if mean_return.isfinite().all():
-            current_ema = alpha * current_ema + (1 - alpha) * mean_return.item()
-        returns_ema.append(current_ema)
+            ema.update("cur", mean_return)
+        returns_ema.append(ema["cur"].item())
         return_stds.append(std_return.item())
         gradients.append(normalization_constant.item())
 
@@ -423,15 +487,13 @@ def fit_mlp_policy(
             val_mean_return = (sum(val_episode_returns) / batch_size).clamp(-100, None)
             val_returns.append(val_mean_return.item())
             if val_mean_return.isfinite().all():
-                val_current_ema = (
-                    alpha * val_current_ema + (1 - alpha) * val_mean_return
-                )
-            val_returns_ema.append(val_current_ema.item())
+                ema.update("val", val_mean_return)
+            val_returns_ema.append(ema["val"].item())
             policy.train()
 
             # Evaluate averaged policy if using Polyak averaging
             if polyak_average:
-                avg_policy = MLPPolicy(state_dim, action_dim, dropout_rate=dropout_rate)
+                avg_policy = MLPPolicy(**policy_kwargs)
                 avg_policy.load_state_dict(avg_state)
                 avg_policy.eval()
                 val_avg_episode_returns = []
@@ -443,78 +505,23 @@ def fit_mlp_policy(
                 )
                 val_avg_returns.append(val_avg_mean_return.item())
                 if val_avg_mean_return.isfinite().all():
-                    val_avg_current_ema = (
-                        alpha * val_avg_current_ema + (1 - alpha) * val_avg_mean_return
-                    )
-                val_avg_returns_ema.append(val_avg_current_ema.item())
+                    ema.update("val_avg", val_avg_mean_return)
+                val_avg_returns_ema.append(ema["val_avg"].item())
 
         if it % eval_interval == 0:
-            l = t.tensor(returns) - t.tensor(return_stds)
-            r = t.tensor(returns) + t.tensor(return_stds)
-            plt.close()
-            plt.clf()
-
-            n_plots = 3 if val_env_factory else 2
-
-            plt.figure(figsize=(10, 10))
-            # Training returns plot
-            plt.subplot(n_plots, 1, 1)
-            plt.title("Training Returns")
-            plt.axhline(0, color="k", linestyle="--")
-            plt.grid(True, which="major", alpha=0.5)
-            plt.grid(True, which="minor", alpha=0.1)
-            plt.minorticks_on()
-            plt.gca().yaxis.set_minor_locator(plt.MultipleLocator(0.1))
-            plt.fill_between(range(len(returns)), l, r, alpha=0.2, color="red")
-            plt.plot(returns, "r-", lw=0.5, label="Current Policy")
-            plt.plot(returns_ema, "r--", label="Current EMA")
-            if polyak_average:
-                eval_x = list(range(0, len(returns), eval_interval))
-                plt.plot(eval_x, avg_returns, "b-", lw=0.5, label="Polyak Average")
-                plt.plot(eval_x, avg_returns_ema, "b--", label="Polyak EMA")
-            plt.legend()
-            returns_95 = t.quantile(t.tensor(returns), 0.95)
-            returns_5 = t.quantile(t.tensor(returns), 0.05)
-            plt.ylim(returns_5 - 0.1, returns_95 + 0.1)
-
-            # Gradient plot
-            plt.subplot(n_plots, 1, 2)
-            plt.title("Gradient Norms")
-            plt.plot(gradients)
-            plt.yscale("log")
-            plt.grid(True, which="major", alpha=0.3)
-
-            # Validation returns plot if applicable
-            if val_env_factory:
-                plt.subplot(n_plots, 1, 3)
-                plt.title("Validation Returns")
-                plt.grid(True, which="major", alpha=0.5)
-                plt.grid(True, which="minor", alpha=0.1)
-                plt.minorticks_on()
-                plt.gca().yaxis.set_minor_locator(plt.MultipleLocator(0.1))
-                val_x = list(range(0, len(returns), val_period))
-                plt.plot(val_x, val_returns, "r-", lw=0.5, label="Current Policy")
-                plt.plot(val_x, val_returns_ema, "r--", label="Current EMA")
-                if polyak_average:
-                    plt.plot(
-                        val_x, val_avg_returns, "b-", lw=0.5, label="Polyak Average"
-                    )
-                    plt.plot(val_x, val_avg_returns_ema, "b--", label="Polyak EMA")
-                plt.legend()
-                if val_returns:
-                    val_returns_95 = t.quantile(t.tensor(val_returns), 0.95)
-                    val_returns_5 = t.quantile(t.tensor(val_returns), 0.05)
-                    plt.ylim(val_returns_5 - 0.1, val_returns_95 + 0.1)
-                plt.axhline(0, color="k", linestyle="--")
-
-            plt.tight_layout()
-            plt.savefig("logs/info.png")
-
+            plot_returns(
+                returns,
+                returns_ema,
+                return_stds,
+                gradients,
+                val_returns,
+                val_returns_ema,
+            )
             t.save(policy.state_dict(), f"checkpoints/policy_{it}.pth")
 
     # Return final averaged policy if using Polyak averaging, otherwise return current policy
     if polyak_average:
-        final_policy = MLPPolicy(state_dim, action_dim, dropout_rate=dropout_rate)
+        final_policy = MLPPolicy(**policy_kwargs)
         final_policy.load_state_dict(avg_state)
         return final_policy
     return policy

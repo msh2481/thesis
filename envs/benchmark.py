@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import torch as t
 from beartype import beartype as typed
@@ -102,6 +103,83 @@ def test_corner_cases():
         assert_good_tensor(reward)
         if done:
             break
+
+
+@typed
+def plot_returns(
+    returns: list[float],
+    returns_ema: list[float],
+    return_stds: list[float],
+    gradients: list[float],
+    val_returns: list[float] | None = None,
+    val_returns_ema: list[float] | None = None,
+    val_period: int = 5,
+    eval_interval: int = 1,
+    avg_returns: list[float] | None = None,
+    avg_returns_ema: list[float] | None = None,
+    val_avg_returns: list[float] | None = None,
+    val_avg_returns_ema: list[float] | None = None,
+) -> None:
+    """Plot training and validation returns."""
+    l = t.tensor(returns) - t.tensor(return_stds)
+    r = t.tensor(returns) + t.tensor(return_stds)
+    plt.close()
+    plt.clf()
+
+    n_plots = 3 if val_returns else 2
+
+    plt.figure(figsize=(10, 10))
+    # Training returns plot
+    plt.subplot(n_plots, 1, 1)
+    plt.title("Training Returns")
+    plt.axhline(0, color="k", linestyle="--")
+    plt.grid(True, which="major", alpha=0.5)
+    plt.grid(True, which="minor", alpha=0.1)
+    plt.minorticks_on()
+    plt.gca().yaxis.set_minor_locator(plt.MultipleLocator(0.1))
+    plt.fill_between(range(len(returns)), l, r, alpha=0.2, color="red")
+    plt.plot(returns, "r-", lw=0.5, label="Current Policy")
+    plt.plot(returns_ema, "r--", label="Current EMA")
+    if avg_returns is not None:
+        eval_x = list(range(0, len(returns), eval_interval))
+        plt.plot(eval_x, avg_returns, "b-", lw=0.5, label="Polyak Average")
+        plt.plot(eval_x, avg_returns_ema, "b--", label="Polyak EMA")
+    plt.legend()
+    returns_95 = t.quantile(t.tensor(returns), 0.95)
+    returns_5 = t.quantile(t.tensor(returns), 0.05)
+    plt.ylim(returns_5 - 0.1, returns_95 + 0.1)
+
+    # Gradient plot
+    plt.subplot(n_plots, 1, 2)
+    plt.title("Gradient Norms")
+    plt.plot(gradients)
+    plt.yscale("log")
+    plt.grid(True, which="major", alpha=0.3)
+
+    # Validation returns plot if applicable
+    if val_returns:
+        plt.subplot(n_plots, 1, 3)
+        plt.title("Validation Returns")
+        plt.grid(True, which="major", alpha=0.5)
+        plt.grid(True, which="minor", alpha=0.1)
+        plt.minorticks_on()
+        plt.gca().yaxis.set_minor_locator(plt.MultipleLocator(0.1))
+        val_x = list(range(0, len(returns), val_period))
+        plt.plot(val_x, val_returns, "r-", lw=0.5, label="Current Policy")
+        plt.plot(val_x, val_returns_ema, "r--", label="Current EMA")
+        if val_avg_returns is not None:
+            plt.plot(val_x, val_avg_returns, "b-", lw=0.5, label="Polyak Average")
+            plt.plot(val_x, val_avg_returns_ema, "b--", label="Polyak EMA")
+        plt.legend()
+        if val_returns:
+            val_returns_95 = t.quantile(t.tensor(val_returns), 0.95)
+            val_returns_5 = t.quantile(t.tensor(val_returns), 0.05)
+            plt.ylim(val_returns_5 - 0.1, val_returns_95 + 0.1)
+        plt.axhline(0, color="k", linestyle="--")
+
+    plt.tight_layout()
+    plt.savefig("logs/info.png")
+    plt.close()
 
 
 if __name__ == "__main__":
