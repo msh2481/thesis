@@ -1,243 +1,107 @@
 import numpy as np
-import numpy.random as rd
-import seaborn as sns
 import torch as t
 from beartype import beartype as typed
-from envs.diff_stock_trading_env import (
-    DiffStockTradingEnv,
-    TActionVec,
-    TReward,
-    TStateVec,
-)
-from envs.stock_trading_env import (
-    ActionVec,
-    PriceVec,
-    Reward,
-    StateVec,
-    StockTradingEnv,
-)
-from jaxtyping import Float, Int
-from matplotlib import pyplot as plt
+from beartype.typing import Callable
+from envs.diff_stock_trading_env import DiffStockTradingEnv
+from jaxtyping import Float
+from loguru import logger
 from torch import Tensor as TT
 
-sns.set_theme(context="notebook", style="white")
+
+@typed
+def make_ema_tech(
+    price_array: Float[TT, "time_dim stock_dim"],
+    periods: list[int] = [1, 4, 16],
+) -> Float[TT, "time_dim stock_dim tech_dim"]:
+    """Generate technical indicators (EMAs) for each stock."""
+    time_dim, stock_dim = price_array.shape
+    tech_dim = len(periods)
+    tech_array = t.zeros((time_dim, stock_dim, tech_dim))
+
+    for i, period in enumerate(periods):
+        alpha = 1.0 / (period + 1)
+        ema = price_array.clone()
+        for j in range(1, time_dim):
+            ema[j] = alpha * price_array[j] + (1 - alpha) * ema[j - 1]
+        tech_array[:, :, i] = ema
+
+    return tech_array
 
 
-class CashRatioEnv(DiffStockTradingEnv):
-    """
-    Environment where the goal is to keep the cash ratio close to 0.5 while doing as much trading as possible.
-    """
-
-    @classmethod
-    @typed
-    def create(cls, n_stocks: int, tech_per_stock: int, n_steps: int):
-        n_tech = n_stocks * tech_per_stock
-        price_array = t.ones((n_steps, n_stocks))
-        tech_array = t.randn((n_steps, n_tech))
-        return cls(price_array, tech_array, initial_cash_ratio=0.4)
-
-    @typed
-    def make_step(
-        self, actions: TActionVec
-    ) -> tuple[TStateVec, TReward, bool, bool, dict]:
-        """Take an action in the environment."""
-        self.time += 1
-        price = self.price_array[self.time]
-
-        old_ratio = self._get_cash_ratio(price)
-        self._execute_actions(actions)
-        new_ratio = self._get_cash_ratio(price)
-        old_new = t.abs(old_ratio - new_ratio)
-        old_dev = t.abs(0.5 - old_ratio)
-        new_dev = t.abs(0.5 - new_ratio)
-        reward = old_new**2 - (old_dev**2 + new_dev**2)
-        truncated = self.last_log_total_asset.item() < -10.0
-        self.last_log_total_asset = self._get_log_total_asset(price)
-
-        state = self._get_state(price)
-
-        terminated = self.time == self.max_step
-
-        return state, reward, terminated, truncated, {}
+@typed
+def generate_random_walks(
+    n_steps: int, n_stocks: int
+) -> Float[TT, "time_dim stock_dim"]:
+    """Generate price array with random walks."""
+    price_array = t.randn((n_steps, n_stocks)) / n_steps**0.5
+    price_array = t.cumsum(price_array, dim=0)
+    price_array = t.exp(price_array)
+    return price_array
 
 
-class PredictableEnv(DiffStockTradingEnv):
-    """
-    Environment where the next price is one of the signals.
-    """
-
-    dt = 5
-    regenerate = False
-
-    @classmethod
-    @typed
-    def build_arrays(cls, n_steps: int, n_stocks: int, tech_per_stock: int):
-        n_tech = n_stocks * tech_per_stock
-        # price_array = t.tensor(
-        #     [[1 if i % 2 == 0 else -1 for j in range(n_stocks)] for i in range(n_steps)]
-        # )
-        price_array = t.randn((n_steps, n_stocks)) / n_steps**0.5
-        price_array = t.cumsum(price_array, dim=0)
-        price_array = t.exp(price_array)
-        tech_array = t.randn((n_steps, n_tech))
-        for i in range(n_stocks):
-            tech_array[:, i * tech_per_stock] = t.roll(price_array[:, i], -cls.dt)
-
-        # check that the next price is one of the signals
-        for tt in range(n_steps - cls.dt):
-            for i in range(n_stocks):
-                assert (
-                    t.abs(
-                        price_array[tt + cls.dt, i] - tech_array[tt, i * tech_per_stock]
-                    ).item()
-                    < 1e-6
-                )
-        return price_array, tech_array
-
-    @classmethod
-    @typed
-    def create(
-        cls, n_stocks: int, tech_per_stock: int, n_steps: int, regenerate: bool = False
-    ):
-        assert tech_per_stock > 0
-        price_array, tech_array = cls.build_arrays(n_steps, n_stocks, tech_per_stock)
-        instance = cls.build(price_array, tech_array, initial_cash_ratio=0.5)
-        instance.tech_per_stock = tech_per_stock
-        instance.n_steps = n_steps
-        instance.regenerate = regenerate
-        return instance
-
-    @typed
-    def reset_state(self, seed: int | None = None) -> tuple[TStateVec, dict]:
-        n_steps = len(self.price_array)
-        n_stocks = self.stock_dim
-        tech_per_stock = self.tech_dim // n_stocks
-        if self.regenerate:
-            self.price_array, self.tech_array = self.build_arrays(
-                n_steps, n_stocks, tech_per_stock
-            )
-        return super().reset_state(seed)
+@typed
+def gen_ma(n_steps: int, n_stocks: int, dt: int = 5) -> Float[TT, "time_dim stock_dim"]:
+    """Generate price array following MA process."""
+    noise = t.randn((n_steps + dt, n_stocks))
+    price_array = t.zeros((n_steps, n_stocks))
+    for i in range(n_steps):
+        price_array[i] = noise[i : i + dt].mean(dim=0).exp()
+    return price_array
 
 
-class MovingAverageEnv(PredictableEnv):
-    """
-    Environment where the price process is MA(dt).
-    """
+@typed
+def gen_trend(n_steps: int, n_stocks: int) -> Float[TT, "time_dim stock_dim"]:
+    """Generate price array with trends."""
+    price_array = t.zeros((n_steps, n_stocks))
+    upward = t.rand((n_stocks,)) > 0.5
+    new_price = t.ones((n_stocks,))
 
-    dt = 5
+    for i in range(n_steps):
+        deltas = t.randn(n_stocks).exp() / 100
+        sign = (2 * upward - 1).float()
+        new_price *= (sign * deltas).exp()
+        flip_prob = t.sigmoid(new_price.log() * sign - 3)
+        flip = t.rand((n_stocks,)) < flip_prob
+        upward = t.where(flip, ~upward, upward)
+        price_array[i] = new_price
 
-    @classmethod
-    def build_arrays(cls, n_steps: int, n_stocks: int, tech_per_stock: int):
-        n_tech = n_stocks * tech_per_stock
-        noise = t.randn((n_steps + cls.dt, n_stocks))
-        price_array = t.zeros((n_steps, n_stocks))
-        tech_array = t.randn((n_steps, n_tech))
-        for i in range(n_steps):
-            price_array[i] = noise[i : i + cls.dt].mean(dim=0).exp()
-        return price_array, tech_array
-
-
-class TrendFollowingEnv(PredictableEnv):
-
-    @classmethod
-    def build_arrays(cls, n_steps: int, n_stocks: int, tech_per_stock: int):
-        n_tech = n_stocks * tech_per_stock
-        price_array = t.zeros((n_steps, n_stocks))
-        upward = t.rand((n_stocks,)) > 0.5
-        tech_array = t.randn((n_steps, n_tech))
-        new_price = t.ones((n_stocks,))
-        ema_period = 5
-        ema_price = t.ones((n_stocks,))
-        for i in range(n_steps):
-            deltas = t.randn(n_stocks).exp() / 100
-            sign = (2 * upward - 1).float()
-            new_price *= (sign * deltas).exp()
-            flip_prob = t.sigmoid(new_price.log() * sign - 3)
-            flip = t.rand((n_stocks,)) < flip_prob
-            upward = t.where(flip, ~upward, upward)
-            ema_price = ema_price * (1 - 1 / ema_period) + new_price / ema_period
-            price_array[i] = new_price
-            tech_array[i, ::tech_per_stock] = ema_price
-
-        return price_array, tech_array
+    return price_array
 
 
-def test_ground_truth():
-    env = PredictableEnv.create(1, 1, 100)
-    state, _ = env.reset()
-    cashes = []
-    actions = []
-    prices = []
-    stocks = []
-    techs = []
-    rewards = []
-    for _ in range(10):
-        cash_ratio, price, stock, tech = state
-        cash = env.cash
-        action = np.array([((price > tech).astype(np.float32) - stock / env.max_stock)])
-        state, reward, terminated, truncated, info = env.step(action)
-        cashes.append(cash)
-        actions.append(action)
-        prices.append(price)
-        stocks.append(stock)
-        techs.append(tech)
-        rewards.append(reward)
-        done = terminated or truncated
-        if done:
-            break
-
-    plt.figure(figsize=(10, 8))
-
-    plt.subplot(2, 3, 1)
-    plt.plot(cashes, "b-", label="Cash")
-    plt.legend()
-
-    plt.subplot(2, 3, 2)
-    plt.plot(prices, "r-", label="Price")
-    plt.plot(techs, "m-", label="Technical Signal")
-    plt.legend()
-
-    plt.subplot(2, 3, 3)
-    plt.plot(stocks, "g-", label="Stock Holdings")
-    plt.legend()
-
-    plt.subplot(2, 3, 4)
-    plt.plot(actions, "k-", label="Action")
-    plt.axhline(0, color="k", linestyle="--")
-    plt.legend()
-
-    plt.subplot(2, 3, 5)
-    plt.plot(rewards, "y-", label="Reward")
-    plt.plot(np.cumsum(rewards), "r-", label="Cumulative Reward")
-    plt.axhline(0, color="k", linestyle="--")
-    plt.legend()
-
-    plt.tight_layout()
-    plt.show()
+@typed
+def create_env(
+    price_generator: Callable, n_steps: int, n_stocks: int, **kwargs
+) -> DiffStockTradingEnv:
+    """Create environment with given price generator."""
+    price_array = price_generator(n_steps, n_stocks, **kwargs)
+    tech_array = make_ema_tech(price_array)
+    return DiffStockTradingEnv(price_array, tech_array)
 
 
-def generate_weird_tensor(n: int) -> Float[TT, "n"]:
-    values = [t.inf, -t.inf, t.nan, -t.nan, 0.0, 1e-1000, 1e-100, 1e-20, 1e20, 1e100]
-    return t.tensor(rd.choice(values, size=(n,)))
-
-
-def assert_good_tensor(tensor: Float[TT, "n"]):
+def assert_good_tensor(tensor: Float[TT, "..."]):
     assert not t.isnan(tensor).any()
     assert not t.isinf(tensor).any()
     assert t.isfinite(tensor).all()
 
 
 def test_corner_cases():
-    env = PredictableEnv.create(2, 2, 100)
+    env = create_env(generate_random_walks, 100, 2)
     state, _ = env.reset_state()
-    assert_good_tensor(state)
-    for _ in range(10):
-        action = generate_weird_tensor(env.action_dim)
-        state, reward, terminated, truncated, _ = env.step_t(action)
+    assert_good_tensor(state.features())
+
+    for _ in range(10**5):
+        # action = t.randn(env.stock_dim).exp()
+        # action /= action.sum() + t.randn(()).exp()
+        action = t.ones(env.stock_dim) / (env.stock_dim + 1)
+        state, reward, terminated, truncated, _ = env.make_step(action)
+        logger.debug(
+            f"Reward: {reward.item():.2f} | Value: {state.value().item():.2f} | Position: {state.position().numpy()}"
+        )
         done = terminated or truncated
-        print(state, reward)
-        assert_good_tensor(state)
+        assert_good_tensor(state.features())
         assert_good_tensor(reward)
+        if done:
+            break
 
 
 if __name__ == "__main__":
