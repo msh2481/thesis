@@ -37,7 +37,7 @@ class CashRatioEnv(DiffStockTradingEnv):
         return cls(price_array, tech_array, initial_cash_ratio=0.4)
 
     @typed
-    def step_t(
+    def make_step(
         self, actions: TActionVec
     ) -> tuple[TStateVec, TReward, bool, bool, dict]:
         """Take an action in the environment."""
@@ -108,7 +108,7 @@ class PredictableEnv(DiffStockTradingEnv):
         return instance
 
     @typed
-    def reset_t(self, seed: int | None = None) -> tuple[TStateVec, dict]:
+    def reset_state(self, seed: int | None = None) -> tuple[TStateVec, dict]:
         n_steps = len(self.price_array)
         n_stocks = self.stock_dim
         tech_per_stock = self.tech_dim // n_stocks
@@ -116,7 +116,7 @@ class PredictableEnv(DiffStockTradingEnv):
             self.price_array, self.tech_array = self.build_arrays(
                 n_steps, n_stocks, tech_per_stock
             )
-        return super().reset_t(seed)
+        return super().reset_state(seed)
 
 
 class MovingAverageEnv(PredictableEnv):
@@ -229,7 +229,7 @@ def assert_good_tensor(tensor: Float[TT, "n"]):
 
 def test_corner_cases():
     env = PredictableEnv.create(2, 2, 100)
-    state, _ = env.reset_t()
+    state, _ = env.reset_state()
     assert_good_tensor(state)
     for _ in range(10):
         action = generate_weird_tensor(env.action_dim)

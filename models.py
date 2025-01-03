@@ -181,7 +181,7 @@ def rollout(
     env: DiffStockTradingEnv,
     deterministic: bool = False,
 ) -> Float[TT, ""]:
-    state, _ = env.reset_t()
+    state, _ = env.reset_state()
     zero_with_gradients = policy.predict(state).sum() * 0
     rewards = [zero_with_gradients]
     total_reward = 0
@@ -189,7 +189,7 @@ def rollout(
 
     for step in range(env.max_step):
         action = policy.predict(state, deterministic=deterministic)
-        state, reward, terminated, truncated, _ = env.step_t(action)
+        state, reward, terminated, truncated, _ = env.make_step(action)
         penalty = env._get_penalty()
         total_reward += reward.item()
         total_penalty += penalty.item()
@@ -524,7 +524,7 @@ def test_gradients():
 
     def helper(i: int, n: int) -> Float[TT, "n"]:
         env = PredictableEnv.create(1, 1, n + 2)
-        state, _ = env.reset_t()
+        state, _ = env.reset_state()
         policy = MLPPolicy(env.state_dim, env.action_dim)
         xs = []
         y = None
@@ -575,7 +575,7 @@ def test_gradients():
 
 def test_penalty():
     env = PredictableEnv.create(1, 1, 100)
-    state, _ = env.reset_t()
+    state, _ = env.reset_state()
     action = t.tensor([-1.5])
     state, reward, terminated, truncated, _ = env.step_t(action)
     print(env._get_penalty().item())

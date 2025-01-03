@@ -8,6 +8,7 @@ from envs.benchmark import (
     PredictableEnv,
     TrendFollowingEnv,
 )
+from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
 from models import fit_mlp_policy, MLPPolicy, rollout
 from tqdm import tqdm
@@ -20,41 +21,41 @@ stocks_test = t.tensor(np.load("stocks_test.npy"), dtype=t.float32)
 tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 
 
-def train_env(**kwargs):
-    return TrendFollowingEnv.create(
-        n_stocks=1, tech_per_stock=1, n_steps=500, regenerate=True
-    )
-
-
-def val_env(**kwargs):
-    return TrendFollowingEnv.create(
-        n_stocks=1, tech_per_stock=1, n_steps=500, regenerate=False
-    )
-
-
-def demo_env(**kwargs):
-    return TrendFollowingEnv.create(
-        n_stocks=1, tech_per_stock=1, n_steps=200, regenerate=False
-    )
-
-
-# full_train_env = DiffStockTradingEnv.build(stocks_old, tech_old)
-# logger.warning(f"Full train env length: {full_train_env.price_array.shape[0]}")
-
-
 # def train_env(**kwargs):
-#     segment_length = 1000
-#     l = np.random.randint(0, full_train_env.price_array.shape[0] - segment_length)
-#     r = l + segment_length
-#     return full_train_env.subsegment(l, r)
+#     return TrendFollowingEnv.create(
+#         n_stocks=1, tech_per_stock=1, n_steps=500, regenerate=True
+#     )
 
 
 # def val_env(**kwargs):
-#     return DiffStockTradingEnv.build(stocks_new, tech_new)
+#     return TrendFollowingEnv.create(
+#         n_stocks=1, tech_per_stock=1, n_steps=500, regenerate=False
+#     )
 
 
 # def demo_env(**kwargs):
-#     return DiffStockTradingEnv.build(stocks_new, tech_new)
+#     return TrendFollowingEnv.create(
+#         n_stocks=1, tech_per_stock=1, n_steps=200, regenerate=False
+#     )
+
+
+full_train_env = DiffStockTradingEnv.build(stocks_old, tech_old)
+logger.warning(f"Full train env length: {full_train_env.price_array.shape[0]}")
+
+
+def train_env(**kwargs):
+    segment_length = 1000
+    l = np.random.randint(0, full_train_env.price_array.shape[0] - segment_length)
+    r = l + segment_length
+    return full_train_env.subsegment(l, r)
+
+
+def val_env(**kwargs):
+    return DiffStockTradingEnv.build(stocks_new, tech_new)
+
+
+def demo_env(**kwargs):
+    return DiffStockTradingEnv.build(stocks_new, tech_new)
 
 
 def train():
@@ -70,7 +71,7 @@ def train():
         max_weight=10.0,
         langevin_coef=0.0,  # 1e-4,
         # prior_std=10.0,
-        # dropout_rate=0.9,
+        dropout_rate=0.9,
         # init_from="checkpoints/tf.pth",
     )
 
@@ -88,7 +89,7 @@ def demo(it: int, avg: bool):
             t.load(f"checkpoints/policy_{it}.pth", weights_only=False)
         )
     policy.eval()
-    state, _ = env.reset_t()
+    state, _ = env.reset_state()
 
     # Lists to store trajectory
     cash_ratio_history = []  # scalar
@@ -118,11 +119,10 @@ def demo(it: int, avg: bool):
         cash_ratio = state[0]
         prices = state[1 : 1 + n_stocks]
         stocks = state[1 + n_stocks : 1 + 2 * n_stocks]
-        techs = state[
-            1 + 2 * n_stocks : 1 + 2 * n_stocks + n_stocks * env.tech_per_stock
-        ]
-        cash = state[1 + 2 * n_stocks + n_stocks * env.tech_per_stock]
-        cash_div_prices = state[1 + 2 * n_stocks + n_stocks * env.tech_per_stock + 1 :]
+        tech_per_stock = getattr(env, "tech_per_stock", 2)
+        techs = state[1 + 2 * n_stocks : 1 + 2 * n_stocks + n_stocks * tech_per_stock]
+        cash = state[1 + 2 * n_stocks + n_stocks * tech_per_stock]
+        cash_div_prices = state[1 + 2 * n_stocks + n_stocks * tech_per_stock + 1 :]
 
         penalty = env._get_penalty()
         if penalty > 0.0:
@@ -180,7 +180,7 @@ def demo(it: int, avg: bool):
     plt.subplot(2, 3, 2)
     for i in range(n_stocks):
         plt.plot(price_history[:, i], f"C{i}-", label=f"Price {i}")
-        plt.plot(tech_history[:, i * env.tech_per_stock], f"C{i}--", label=f"Tech {i}")
+        plt.plot(tech_history[:, i * tech_per_stock], f"C{i}--", label=f"Tech {i}")
     plt.axhline(0, color="k", linestyle="--")
     plt.legend()
 
