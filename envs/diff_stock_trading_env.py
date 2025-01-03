@@ -49,7 +49,9 @@ class State:
 
     @typed
     def features(self, numpy: bool = False, flat: bool = False) -> Features:
-        features = t.cat([self.prices, self.position(), self.tech], dim=1)
+        features = t.cat(
+            [self.prices[:, None], self.position()[:, None], self.tech], dim=1
+        )
         if flat:
             features = features.flatten()
         if numpy:
@@ -99,7 +101,11 @@ class DiffStockTradingEnv(gym.Env):
         self.tech_array = tech_array
         self.n_steps, self.stock_dim, self.tech_dim = self.tech_array.shape
         self.initial_value = initial_value
-        self.initial_position = initial_position or t.ones(()) / (self.stock_dim + 1)
+        self.initial_position = (
+            initial_position
+            if initial_position is not None
+            else t.ones(self.stock_dim) / (self.stock_dim + 1)
+        )
         self.buy_cost_pct = buy_cost_pct
         self.sell_cost_pct = sell_cost_pct
         self.numpy = numpy
@@ -179,7 +185,7 @@ class DiffStockTradingEnv(gym.Env):
         self.last_log_value = new_log_value
 
         truncated = False
-        terminated = self.time == self.max_step
+        terminated = self.time == self.n_steps - 1
 
         return self.state, reward, terminated, truncated, {}
 
@@ -198,70 +204,70 @@ class DiffStockTradingEnv(gym.Env):
 
 
 def test_env_1():
-    """Rewards should be positive and slowly decreasing in the first phase and in the middle, then zero."""
+    """Rewards should be positive and slowly decreasing in the first phase, then zero."""
     n = 20
     prices = t.stack(
         [
             t.linspace(1, 1001, n),
             t.linspace(1, 2001, n),
         ],
-        axis=1,
+        dim=1,
     )
     techs = t.stack(
         [
-            t.linspace(0, 1, n),
-            t.linspace(0, 1, n),
+            t.linspace(0, 1, n).unsqueeze(1),
+            t.linspace(0, 1, n).unsqueeze(1),
         ],
-        axis=1,
+        dim=1,
     )
-    env = DiffStockTradingEnv(prices, techs, initial_stocks=1)
-    state, _ = env.reset()
-    for _ in range(10):
-        action = np.zeros(env.action_dim)
-        _, reward, terminated, truncated, _ = env.step(action)
+    env = DiffStockTradingEnv(prices, techs, initial_value=t.tensor(1.0))
+    state, _ = env.reset_state()
+
+    for i in range(10):
+        action = t.zeros(env.stock_dim)
+        action[0] = (i + 1) / 10
+        state, reward, terminated, truncated, _ = env.make_step(action)
         done = terminated or truncated
-        print(reward, done)
-    action = -np.ones(env.action_dim)
-    _, reward, terminated, truncated, _ = env.step(action)
-    done = terminated or truncated
-    print("---")
-    print(reward, done)
+        print(reward.item(), done)
+
     print("---")
     for _ in range(5):
-        action = np.zeros(env.action_dim)
-        _, reward, terminated, truncated, _ = env.step(action)
+        action = t.zeros(env.stock_dim)
+        state, reward, terminated, truncated, _ = env.make_step(action)
         done = terminated or truncated
-        print(reward, done)
+        print(reward.item(), done)
 
 
 def test_env_2():
-    """Test safety mechanism by continuously buying first stock."""
+    """Test position setting with constant prices."""
     n = 50
-    prices = t.ones((n, 2)) * 1.0  # Constant prices to focus on quantities
-    techs = t.zeros((n, 2))  # No technical indicators needed
-    env = DiffStockTradingEnv.build(
-        prices, techs, initial_stocks=1, initial_cash_ratio=0.4
+    prices = t.ones((n, 2))  # Constant prices to focus on quantities
+    techs = t.zeros((n, 2, 1))  # No technical indicators needed
+    env = DiffStockTradingEnv(
+        prices,
+        techs,
+        initial_value=t.tensor(1.0),
+        initial_position=t.tensor([0.3, 0.3]),  # 40% cash initially
     )
 
     # Track history
     cash_history = []
     stock_history = []
-    action_history = []
-    actual_action_history = []
+    position_history = []
 
     state, _ = env.reset_state()
-    cash_history.append(env.cash.item())
-    stock_history.append(env.stocks[0].item())
+    cash_history.append(state.cash.item())
+    stock_history.append(state.stocks[0].item())
+    position_history.append(state.position()[0].item())
 
-    # Try to buy first stock aggressively
+    # Try different position settings
     for _ in range(n - 1):
-        action = t.tensor([0.0007, 0.0])  # Always try to buy max of first stock
-        action_history.append(action[0].item())
+        new_position = t.tensor([0.4, 0.4])  # Try to increase stock positions
+        state, reward, terminated, truncated, _ = env.make_step(new_position)
 
-        state, reward, terminated, truncated, info = env.step_t(action)
-        actual_action_history.append(info["actual_actions"][0].item())
-        cash_history.append(env.cash.item())
-        stock_history.append(env.stocks[0].item())
+        cash_history.append(state.cash.item())
+        stock_history.append(state.stocks[0].item())
+        position_history.append(state.position()[0].item())
 
         if terminated or truncated:
             break
@@ -274,20 +280,18 @@ def test_env_2():
     plt.subplot(2, 1, 1)
     plt.plot(cash_history, "b-", label="Cash")
     plt.plot(stock_history, "r-", label="Stock 1 Quantity")
-    plt.axhline(0.1, color="k", linestyle="--", label="Safety Threshold")
     plt.grid(True)
     plt.legend()
     plt.title("Cash and Stock Quantities")
 
     plt.subplot(2, 1, 2)
-    plt.plot(action_history, "b-", label="Attempted Actions")
-    plt.plot(actual_action_history, "r-", label="Actual Actions")
+    plt.plot(position_history, "g-", label="Stock 1 Position")
     plt.grid(True)
     plt.legend()
-    plt.title("Actions vs Actual Actions")
+    plt.title("Position History")
 
     plt.tight_layout()
-    plt.savefig("logs/safety_test.png")
+    plt.savefig("logs/position_test.png")
     plt.close()
 
 
