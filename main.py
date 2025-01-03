@@ -1,61 +1,46 @@
-import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 import torch as t
-from envs.benchmark import (
-    CashRatioEnv,
-    MovingAverageEnv,
-    PredictableEnv,
-    TrendFollowingEnv,
-)
+from envs.benchmark import gen_trend, make_ema_tech
 from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
 from models import fit_policy, MLPPolicy, rollout
 from tqdm import tqdm
 
-stocks_new = t.tensor(np.load("stocks_new.npy"), dtype=t.float32)
-tech_new = t.tensor(np.load("tech_new.npy"), dtype=t.float32)
-stocks_old = t.tensor(np.load("stocks_old.npy"), dtype=t.float32)
-tech_old = t.tensor(np.load("tech_old.npy"), dtype=t.float32)
-stocks_test = t.tensor(np.load("stocks_test.npy"), dtype=t.float32)
-tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
+# stocks_new = t.tensor(np.load("stocks_new.npy"), dtype=t.float32)
+# tech_new = t.tensor(np.load("tech_new.npy"), dtype=t.float32)
+# stocks_old = t.tensor(np.load("stocks_old.npy"), dtype=t.float32)
+# tech_old = t.tensor(np.load("tech_old.npy"), dtype=t.float32)
+# stocks_test = t.tensor(np.load("stocks_test.npy"), dtype=t.float32)
+# tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 
-
-# def train_env(**kwargs):
-#     return TrendFollowingEnv.create(
-#         n_stocks=1, tech_per_stock=1, n_steps=500, regenerate=True
-#     )
-
-
-# def val_env(**kwargs):
-#     return TrendFollowingEnv.create(
-#         n_stocks=1, tech_per_stock=1, n_steps=500, regenerate=False
-#     )
-
-
-# def demo_env(**kwargs):
-#     return TrendFollowingEnv.create(
-#         n_stocks=1, tech_per_stock=1, n_steps=200, regenerate=False
-#     )
-
-
-full_train_env = DiffStockTradingEnv.build(stocks_old, tech_old)
-logger.warning(f"Full train env length: {full_train_env.price_array.shape[0]}")
+full_train_prices = gen_trend(10000, 1)
+full_train_tech = make_ema_tech(full_train_prices)
+full_train_env = DiffStockTradingEnv(full_train_prices, full_train_tech)
+full_val_prices = gen_trend(10000, 1)
+full_val_tech = make_ema_tech(full_val_prices)
+full_val_env = DiffStockTradingEnv(full_val_prices, full_val_tech)
 
 
 def train_env(**kwargs):
-    segment_length = 1000
-    l = np.random.randint(0, full_train_env.price_array.shape[0] - segment_length)
-    r = l + segment_length
+    train_length = 1000
+    l = np.random.randint(0, full_train_env.price_array.shape[0] - train_length)
+    r = l + train_length
     return full_train_env.subsegment(l, r)
 
 
 def val_env(**kwargs):
-    return DiffStockTradingEnv.build(stocks_new, tech_new)
+    val_length = 1000
+    l = np.random.randint(0, full_val_env.price_array.shape[0] - val_length)
+    r = l + val_length
+    return full_val_env.subsegment(l, r)
 
 
 def demo_env(**kwargs):
-    return DiffStockTradingEnv.build(stocks_new, tech_new)
+    demo_length = 200
+    l = np.random.randint(0, full_val_env.price_array.shape[0] - demo_length)
+    r = l + demo_length
+    return full_val_env.subsegment(l, r)
 
 
 def train():
@@ -78,8 +63,12 @@ def train():
 
 def demo(it: int, avg: bool):
     env = demo_env()
-    steps = getattr(env, "n_steps", getattr(env, "max_step"))
-    policy = MLPPolicy(env.state_dim, env.action_dim, dropout_rate=0.9)
+    steps = env.n_steps
+    policy = MLPPolicy(
+        env.observation_space.shape,
+        env.action_space.shape[0],
+        dropout_rate=0.9,
+    )
     if avg:
         policy.load_state_dict(
             t.load(f"checkpoints/avg_policy_{it}.pth", weights_only=False)
@@ -92,124 +81,79 @@ def demo(it: int, avg: bool):
     state, _ = env.reset_state()
 
     # Lists to store trajectory
-    cash_ratio_history = []  # scalar
-    cash_history = []  # scalar
-    action_history = []  # [n_stocks]
-    price_history = []  # [n_stocks]
-    stock_history = []  # [n_stocks]
-    tech_history = []  # [n_stocks]
-    reward_history = []  # scalar
-    portfolio_value_history = []  # scalar
-    initial_cash = env.cash.item()
-    n_stocks = env.stock_dim
+    cash_history = []
+    position_history = []
+    price_history = []
+    tech_history = []
+    reward_history = []
+    value_history = []
+    initial_value = state.value().item()
 
-    # Destructure initial state
-    cash_ratio = state[0]  # scalar
-    prices = state[1 : 1 + n_stocks]  # n_stocks
-    stocks = state[1 + n_stocks : 1 + 2 * n_stocks]  # n_stocks
-    techs = state[1 + 2 * n_stocks : 1 + 3 * n_stocks]  # n_stocks
-    cash = state[1 + 3 * n_stocks]  # scalar
-    cash_div_prices = state[1 + 3 * n_stocks + 1 :]  # n_stocks
+    with t.no_grad():
+        for _ in range(steps):
+            action = policy.predict(
+                state.features(env.numpy, env.flat), noise_level=1e-4
+            )
+            state, reward, terminated, truncated, _ = env.make_step(action)
+            # Store state information
+            cash_history.append(state.cash.item())
+            position_history.append(state.position().numpy())
+            price_history.append(state.prices.numpy())
+            tech_history.append(state.tech.numpy())
+            reward_history.append(reward.item())
+            value_history.append(state.value().item())
 
-    for _ in range(steps):
-        action = policy.predict(state)
-        state, reward, terminated, truncated, info = env.step_t(action)
-
-        # Destructure new state
-        cash_ratio = state[0]
-        prices = state[1 : 1 + n_stocks]
-        stocks = state[1 + n_stocks : 1 + 2 * n_stocks]
-        tech_per_stock = getattr(env, "tech_per_stock", 2)
-        techs = state[1 + 2 * n_stocks : 1 + 2 * n_stocks + n_stocks * tech_per_stock]
-        cash = state[1 + 2 * n_stocks + n_stocks * tech_per_stock]
-        cash_div_prices = state[1 + 2 * n_stocks + n_stocks * tech_per_stock + 1 :]
-
-        penalty = env._get_penalty()
-        if penalty > 0.0:
-            logger.warning(f"Penalty: {penalty.item()}")
-
-        # Store vectors and scalars
-        cash_ratio_history.append(cash_ratio.item())
-        cash_history.append(cash.item())
-        action_history.append(action.detach().cpu().numpy())
-        price_history.append(prices.detach().cpu().numpy())
-        stock_history.append(stocks.detach().cpu().numpy())
-        tech_history.append(techs.detach().cpu().numpy())
-        reward_history.append(reward.item())
-        portfolio_value_history.append(cash.item() + (stocks * prices).sum().item())
-
-        done = terminated or truncated
-        if done:
-            break
+            done = terminated or truncated
+            if done:
+                break
 
     # Convert lists to arrays
-    cash_ratio_history = np.array(cash_ratio_history)
     cash_history = np.array(cash_history)
-    action_history = np.array(action_history)
+    position_history = np.array(position_history)
     price_history = np.array(price_history)
-    stock_history = np.array(stock_history)
     tech_history = np.array(tech_history)
-    portfolio_value_history = np.array(portfolio_value_history)
+    value_history = np.array(value_history)
 
-    # Calculate buy & hold returns based on average cash ratio
-    avg_cash_ratio = cash_ratio_history.mean()
+    # Calculate buy & hold returns
+    equal_position = np.ones(env.stock_dim) / (env.stock_dim + 1)  # Including cash
     buy_hold_values = []
-
-    # Initial allocation based on average cash ratio
-    initial_stock_value = (1 - avg_cash_ratio) * initial_cash
-    initial_stock_units = (
-        initial_stock_value / price_history[0].sum()
-    )  # Equally weighted portfolio
-    initial_cash_held = avg_cash_ratio * initial_cash
-
-    for price in price_history:  # price is [n_stocks]
-        # For each timestep, calculate portfolio value with constant allocation
-        stock_value = initial_stock_units * price.sum()
-        value = initial_cash_held + stock_value
-        buy_hold_values.append(value)
+    buy_hold_value = initial_value
+    for prices in price_history:
+        returns = prices / price_history[0]
+        portfolio_return = (returns * equal_position[:-1]).sum()
+        buy_hold_value *= portfolio_return
+        buy_hold_values.append(buy_hold_value)
     buy_hold_values = np.array(buy_hold_values)
 
-    plt.figure(figsize=(10, 8))
+    # Plot results
+    plt.figure(figsize=(15, 10))
 
-    plt.subplot(2, 3, 1)
-    plt.plot(cash_ratio_history, "b-", label="Cash Ratio")
-    plt.axhline(avg_cash_ratio, color="k", linestyle="--", label="Avg Cash Ratio")
-    plt.axhline(0, color="k", linestyle=":")
+    plt.subplot(2, 2, 1)
+    plt.title("Portfolio Value")
+    plt.plot(value_history, "b-", label="Policy")
+    plt.plot(buy_hold_values, "r--", label="Buy & Hold")
+    plt.grid(True)
     plt.legend()
 
-    plt.subplot(2, 3, 2)
-    for i in range(n_stocks):
-        plt.plot(price_history[:, i], f"C{i}-", label=f"Price {i}")
-        plt.plot(tech_history[:, i * tech_per_stock], f"C{i}--", label=f"Tech {i}")
-    plt.axhline(0, color="k", linestyle="--")
+    plt.subplot(2, 2, 2)
+    plt.title("Asset Prices")
+    for i in range(env.stock_dim):
+        plt.plot(price_history[:, i], label=f"Asset {i+1}")
+    plt.grid(True)
     plt.legend()
 
-    plt.subplot(2, 3, 3)
-    for i in range(n_stocks):
-        plt.plot(stock_history[:, i], f"C{i}-", label=f"Stock {i}")
-    plt.axhline(0, color="k", linestyle=":")
+    plt.subplot(2, 2, 3)
+    plt.title("Portfolio Positions")
+    for i in range(env.stock_dim):
+        plt.plot(position_history[:, i], label=f"Asset {i+1}")
+    plt.plot(1 - position_history.sum(axis=1), label="Cash")
+    plt.grid(True)
     plt.legend()
 
-    plt.subplot(2, 3, 4)
-    for i in range(n_stocks):
-        plt.plot(action_history[:, i], f"C{i}-", label=f"Action {i}")
-    plt.axhline(0, color="k", linestyle="--")
-    plt.legend()
-
-    plt.subplot(2, 3, 5)
-    plt.plot(np.cumsum(reward_history), "r-", label="Strategy Cum. Reward")
-    strategy_value_change = portfolio_value_history - portfolio_value_history[0]
-    buyhold_value_change = np.log(buy_hold_values) - np.log(buy_hold_values[0])
-    plt.plot(buyhold_value_change, "b--", label="Buy & Hold Cum. Return")
-    plt.axhline(0, color="k", linestyle="--")
-    plt.legend()
-
-    plt.subplot(2, 3, 6)
-    for i in range(n_stocks):
-        plt.plot(price_history[:, i], f"C{i}-", label=f"Price {i}")
-        plt.plot(action_history[:, i], f"C{i}--", alpha=0.5, label=f"Action {i}")
-    plt.axhline(0, color="k", linestyle="--")
-    plt.legend()
+    plt.subplot(2, 2, 4)
+    plt.title("Cumulative Returns")
+    plt.plot(np.cumsum(reward_history), "g-")
+    plt.grid(True)
 
     plt.tight_layout()
     plt.savefig("logs/demo.png")

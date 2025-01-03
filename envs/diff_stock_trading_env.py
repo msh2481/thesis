@@ -153,7 +153,7 @@ class DiffStockTradingEnv(gym.Env):
     @typed
     def reset(self, seed: int | None = None) -> tuple[Features, dict]:
         state, info = self.reset_state(seed)
-        return state.features(numpy=True, flat=self.flat), info
+        return state.features(numpy=self.numpy, flat=self.flat), info
 
     @typed
     def subsegment(self, l: int, r: int) -> "DiffStockTradingEnv":
@@ -196,7 +196,7 @@ class DiffStockTradingEnv(gym.Env):
     ) -> tuple[Features, Float[TT, ""] | Float[ND, ""], bool, bool, dict]:
         state, reward, terminated, truncated, info = self.make_step(actions)
         return (
-            state.features(numpy=True, flat=self.flat),
+            state.features(numpy=self.numpy, flat=self.flat),
             reward.numpy() if self.numpy else reward,
             terminated,
             truncated,

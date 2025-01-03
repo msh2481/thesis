@@ -1,18 +1,12 @@
-from abc import ABC, abstractmethod
-from concurrent.futures import as_completed, ThreadPoolExecutor
-
 import torch as t
 from beartype import beartype as typed
 from beartype.typing import Callable
-from envs.benchmark import PredictableEnv
 from envs.diff_stock_trading_env import DiffStockTradingEnv
 from jaxtyping import Float, Int
 from loguru import logger
 from matplotlib import pyplot as plt
 from optimizers import CautiousAdamW, CautiousLion, CautiousSGD
 from torch import nn, Tensor as TT
-from torch.distributions import Distribution
-from torch.nn import functional as F
 from tqdm.auto import tqdm
 
 
@@ -123,10 +117,6 @@ class MLPPolicy(nn.Module):
         nn.init.normal_(self.head.weight, std=1e-9)
         nn.init.zeros_(self.head.bias)
 
-        logger.info(
-            f"MLPPolicy initialized with input shape = {input_shape} and #parameters = {sum(p.numel() for p in self.parameters())}"
-        )
-
     @typed
     def predict(
         self, state: Float[TT, "..."], noise_level: float
@@ -180,22 +170,17 @@ def rollout(
     env: DiffStockTradingEnv,
     noise_level: float,
 ) -> Float[TT, ""]:
-    state, _ = env.reset_state()
+    state, _ = env.reset()
     zero_with_gradients = policy.predict(state, noise_level).sum() * 0
     rewards = [zero_with_gradients]
     total_reward = 0
-    total_penalty = 0
-
-    for step in range(env.max_step):
+    for step in range(env.n_steps):
         action = policy.predict(state, noise_level)
-        state, reward, terminated, truncated, _ = env.make_step(action)
-        penalty = env._get_penalty()
+        state, reward, terminated, truncated, _ = env.step(action)
         total_reward += reward.item()
-        total_penalty += penalty.item()
         rewards.append(reward)
         if terminated or truncated:
             break
-
     episode_return = sum(rewards)
     return episode_return
 
@@ -284,7 +269,7 @@ def fit_policy(
     batch_size: int = 1,
     lr: float = 1e-3,
     rollout_fn: Callable[
-        [MLPPolicy, DiffStockTradingEnv, int, int], Float[TT, ""]
+        [MLPPolicy, DiffStockTradingEnv, float], Float[TT, ""]
     ] = rollout,
     init_from: str | None = None,
     polyak_average: bool = False,
@@ -295,10 +280,14 @@ def fit_policy(
     val_period: int = 10,
     prior_std: float = 1e9,
     dropout_rate: float = 0.0,
+    noise_level: float = 1e-4,
 ):
     # Get dimensions once from a temporary environment
     tmp_env = env_factory()
-    state_shape, action_dim = tmp_env.state_shape, tmp_env.action_dim
+    state_shape, action_dim = (
+        tmp_env.observation_space.shape,
+        tmp_env.action_space.shape[0],
+    )
     del tmp_env
 
     policy_kwargs = {
@@ -307,6 +296,8 @@ def fit_policy(
         "dropout_rate": dropout_rate,
     }
     policy = MLPPolicy(**policy_kwargs)
+    n_params = sum(p.numel() for p in policy.parameters())
+    logger.warning(f"MLPPolicy initialized with #parameters = {n_params}")
     if init_from is not None:
         policy.load_state_dict(t.load(init_from, weights_only=False))
 
@@ -346,7 +337,7 @@ def fit_policy(
     for it in pbar:
         episode_returns = []
         for _ in range(batch_size):
-            episode_return = rollout_fn(policy, env)
+            episode_return = rollout_fn(policy, env, noise_level)
             episode_returns.append(episode_return)
 
         mean_return = (sum(episode_returns) / batch_size).clamp(-100, None)
@@ -454,7 +445,7 @@ def fit_policy(
             avg_policy.eval()
             avg_episode_returns = []
             for _ in range(batch_size):
-                avg_return = rollout_fn(avg_policy, env)
+                avg_return = rollout_fn(avg_policy, env, noise_level)
                 avg_episode_returns.append(avg_return)
             avg_mean_return = (sum(avg_episode_returns) / batch_size).clamp(-100, None)
             last_avg_return = avg_mean_return.item()
@@ -482,7 +473,7 @@ def fit_policy(
             policy.eval()
             val_episode_returns = []
             for _ in range(batch_size):
-                val_return = rollout_fn(policy, val_env)
+                val_return = rollout_fn(policy, val_env, noise_level)
                 val_episode_returns.append(val_return)
             val_mean_return = (sum(val_episode_returns) / batch_size).clamp(-100, None)
             val_returns.append(val_mean_return.item())
@@ -498,7 +489,7 @@ def fit_policy(
                 avg_policy.eval()
                 val_avg_episode_returns = []
                 for _ in range(batch_size):
-                    val_avg_return = rollout_fn(avg_policy, val_env)
+                    val_avg_return = rollout_fn(avg_policy, val_env, noise_level)
                     val_avg_episode_returns.append(val_avg_return)
                 val_avg_mean_return = (sum(val_avg_episode_returns) / batch_size).clamp(
                     -100, None
@@ -516,6 +507,12 @@ def fit_policy(
                 gradients,
                 val_returns,
                 val_returns_ema,
+                val_period=val_period,
+                eval_interval=eval_interval,
+                avg_returns=avg_returns,
+                avg_returns_ema=avg_returns_ema,
+                val_avg_returns=val_avg_returns,
+                val_avg_returns_ema=val_avg_returns_ema,
             )
             t.save(policy.state_dict(), f"checkpoints/policy_{it}.pth")
 
