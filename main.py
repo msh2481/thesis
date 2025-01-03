@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch as t
-from envs.benchmark import gen_trend, make_ema_tech
+from envs.benchmark import gen_ma, gen_trend, make_ema_tech
 from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
 from models import fit_policy, MLPPolicy, rollout
@@ -14,10 +14,11 @@ from tqdm import tqdm
 # stocks_test = t.tensor(np.load("stocks_test.npy"), dtype=t.float32)
 # tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 
-full_train_prices = gen_trend(10000, 1)
+fn = gen_trend
+full_train_prices = fn(10**5, 1)
 full_train_tech = make_ema_tech(full_train_prices)
 full_train_env = DiffStockTradingEnv(full_train_prices, full_train_tech)
-full_val_prices = gen_trend(10000, 1)
+full_val_prices = fn(10**5, 1)
 full_val_tech = make_ema_tech(full_val_prices)
 full_val_env = DiffStockTradingEnv(full_val_prices, full_val_tech)
 
@@ -37,7 +38,7 @@ def val_env(**kwargs):
 
 
 def demo_env(**kwargs):
-    demo_length = 200
+    demo_length = 1000
     l = np.random.randint(0, full_val_env.price_array.shape[0] - demo_length)
     r = l + demo_length
     return full_val_env.subsegment(l, r)
@@ -50,13 +51,13 @@ def train():
         val_period=5,
         n_epochs=1000,
         batch_size=1,
-        lr=1e-5,
+        lr=1e-3,
         rollout_fn=rollout,
         polyak_average=True,
         max_weight=10.0,
         langevin_coef=0.0,  # 1e-4,
         # prior_std=10.0,
-        dropout_rate=0.9,
+        dropout_rate=0.0,
         # init_from="checkpoints/tf.pth",
     )
 
@@ -92,7 +93,7 @@ def demo(it: int, avg: bool):
     with t.no_grad():
         for _ in range(steps):
             action = policy.predict(
-                state.features(env.numpy, env.flat), noise_level=1e-4
+                state.features(env.numpy, env.flat), noise_level=0.0
             )
             state, reward, terminated, truncated, _ = env.make_step(action)
             # Store state information
@@ -113,25 +114,32 @@ def demo(it: int, avg: bool):
     price_history = np.array(price_history)
     tech_history = np.array(tech_history)
     value_history = np.array(value_history)
+    logreturn_history = np.log(value_history / value_history[0])
 
     # Calculate buy & hold returns
-    equal_position = np.ones(env.stock_dim) / (env.stock_dim + 1)  # Including cash
-    buy_hold_values = []
-    buy_hold_value = initial_value
+    avg_pos = np.mean(position_history, axis=0)
+    logger.debug(f"Average position: {avg_pos}")
+    buy_hold_logreturns = []
+    buy_hold_logreturn = 0
+    last_prices = price_history[0]
     for prices in price_history:
-        returns = prices / price_history[0]
-        portfolio_return = (returns * equal_position[:-1]).sum()
-        buy_hold_value *= portfolio_return
-        buy_hold_values.append(buy_hold_value)
-    buy_hold_values = np.array(buy_hold_values)
+        stocks = avg_pos / last_prices
+        cash = 1 - avg_pos.sum()
+        current_return = ((prices * stocks).sum() + cash) / (
+            (last_prices * stocks).sum() + cash
+        )
+        buy_hold_logreturn += np.log(current_return)
+        buy_hold_logreturns.append(buy_hold_logreturn)
+        last_prices = prices
+    buy_hold_logreturns = np.array(buy_hold_logreturns)
 
     # Plot results
     plt.figure(figsize=(15, 10))
 
     plt.subplot(2, 2, 1)
     plt.title("Portfolio Value")
-    plt.plot(value_history, "b-", label="Policy")
-    plt.plot(buy_hold_values, "r--", label="Buy & Hold")
+    plt.plot(logreturn_history, "b-", label="Policy")
+    plt.plot(buy_hold_logreturns, "r--", label="Average position")
     plt.grid(True)
     plt.legend()
 
@@ -158,21 +166,6 @@ def demo(it: int, avg: bool):
     plt.tight_layout()
     plt.savefig("logs/demo.png")
     plt.close()
-
-
-def evaluate():
-    n = 50
-    results = []
-    for _ in tqdm(range(n)):
-        env = demo_env()
-        policy = SafePolicy(env.state_dim, env.action_dim)
-        result = rollout(policy, env, deterministic=True)
-        results.append(result.item())
-    print("Median reward:", np.median(results))
-    print("Min reward:", np.min(results))
-    print("Max reward:", np.max(results))
-    print(f"Average reward: {np.mean(results)}")
-    print(f"Std: {np.std(results) / np.sqrt(n)}")
 
 
 import argparse

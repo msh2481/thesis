@@ -137,6 +137,7 @@ class MLPPolicy(nn.Module):
         flat_state = state_normalized.flatten()
         x = self.backbone(flat_state)
         logits = self.head(x)
+        logits.data.clamp_(-5, 5)
         unnormalized_position = (logits + noise_level * t.randn_like(logits)).exp()
         position = unnormalized_position / (unnormalized_position.sum() + 1)
         return position
@@ -331,10 +332,10 @@ def fit_policy(
     val_avg_returns = []
     val_avg_returns_ema = []
 
-    env = env_factory()
     current_lr = lr
 
     for it in pbar:
+        env = env_factory()
         episode_returns = []
         for _ in range(batch_size):
             episode_return = rollout_fn(policy, env, noise_level)
@@ -395,10 +396,10 @@ def fit_policy(
         assert (
             normalization_constant.isfinite()
         ), "Gradient normalization constant is NaN"
-        if normalization_constant > 0:
-            for p in policy.parameters():
-                if p.grad is not None:
-                    p.grad.div_(normalization_constant)
+        # if normalization_constant > 0:
+        #     for p in policy.parameters():
+        #         if p.grad is not None:
+        #             p.grad.div_(normalization_constant)
 
         opt.step()
         scheduler.step()

@@ -14,6 +14,26 @@ Features = (
 )
 
 
+@typed
+def logits_to_position(logits: Float[TT, "stock_dim"]) -> Float[TT, "stock_dim"]:
+    unnormalized = logits.clamp(-10, 10).exp()
+    return unnormalized / (unnormalized.sum() + 1)
+
+
+@typed
+def position_to_logits(position: Float[TT, "stock_dim"]) -> Float[TT, "stock_dim"]:
+    position = position / (1 - position.sum())
+    return position.log()
+
+
+def test_logits():
+    x = t.tensor([8.0, 9, 10])
+    y = logits_to_position(x)
+    print(y)
+    z = position_to_logits(y)
+    print(z)
+
+
 class State:
     cash: Float[TT, ""]
     stocks: Float[TT, "stock_dim"]
@@ -49,9 +69,9 @@ class State:
 
     @typed
     def features(self, numpy: bool = False, flat: bool = False) -> Features:
-        features = t.cat(
-            [self.prices[:, None], self.position()[:, None], self.tech], dim=1
-        )
+        position = self.position()
+        logits = position_to_logits(position)
+        features = t.cat([self.prices[:, None], logits[:, None], self.tech], dim=1)
         if flat:
             features = features.flatten()
         if numpy:
@@ -297,4 +317,4 @@ def test_env_2():
 
 
 if __name__ == "__main__":
-    test_env_2()
+    test_logits()
