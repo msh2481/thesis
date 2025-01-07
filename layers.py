@@ -14,7 +14,12 @@ from tqdm.auto import tqdm
 
 class DimWiseLinear(nn.Module):
     def __init__(
-        self, in_features: int, out_features: int, dim: int, bias: bool = True
+        self,
+        in_features: int,
+        out_features: int,
+        dim: int,
+        bias: bool = True,
+        gain: float = 1.0,
     ):
         """Linear layer that operates along a specific dimension.
 
@@ -28,11 +33,13 @@ class DimWiseLinear(nn.Module):
         assert dim in [0, 1], "Dim must be 0 or 1"
         self.dim = dim
         self.linear = nn.Linear(in_features, out_features, bias=bias)
+        self.gain = gain
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         """Initialize weights using orthogonal initialization."""
         nn.init.orthogonal_(self.linear.weight)
+        self.linear.weight.data *= self.gain
         if self.linear.bias is not None:
             nn.init.zeros_(self.linear.bias)
 
@@ -250,25 +257,11 @@ def dimwise_test_fn(x: Float[TT, "batch 4 5"]) -> Float[TT, "batch 4 3"]:
     return y
 
 
-def test_dimwise():
+def test_stockblock():
     model = nn.Sequential(
-        # SortedDimWiseMLP(4, 0),
-        # Residual(DimWiseLinear(5, 5, 1)),
-        StockBlock(4, 5, 5, True),
         StockBlock(4, 5, 5, True),
         DimWiseLinear(5, 3, 1),
-        # nn.Softmax(dim=-1),
     )
-    # model = nn.Sequential(
-    #     DimWiseLinear(4, 4, 0),
-    #     DimWiseLinear(5, 16, 1),
-    #     nn.ReLU(),
-    #     StockBlock(4, 16, 3),
-    #     nn.ReLU(),
-    #     # StockBlock(4, 3, 3),
-    #     DimWiseLinear(4, 4, 0),
-    #     DimWiseLinear(3, 3, 1),
-    # )
     n_params = sum(p.numel() for p in model.parameters())
     logger.warning(f"#params = {n_params}")
     # init all layers inside residuals to small values
@@ -340,6 +333,6 @@ def test_sorted():
 
 
 if __name__ == "__main__":
-    test_dimwise()
+    test_stockblock()
     # test_perm_invariant()
     # test_sorted()
