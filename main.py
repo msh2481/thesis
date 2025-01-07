@@ -15,7 +15,7 @@ from tqdm import tqdm
 # tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 
 fn = gen_trend
-full_train_prices = fn(10**5, 1)
+full_train_prices = fn(2000, 1)
 full_train_tech = make_ema_tech(full_train_prices)
 full_train_env = DiffStockTradingEnv(full_train_prices, full_train_tech)
 full_val_prices = fn(10**5, 1)
@@ -55,9 +55,7 @@ def train():
         rollout_fn=rollout,
         polyak_average=True,
         max_weight=10.0,
-        langevin_coef=0.0,  # 1e-4,
-        # prior_std=10.0,
-        dropout_rate=0.0,
+        dropout_rate=0.5,
         # init_from="checkpoints/tf.pth",
     )
 
