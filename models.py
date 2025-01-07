@@ -94,26 +94,29 @@ class MLPPolicy(nn.Module):
         self,
         input_shape: tuple[int, ...],
         output_dim: int,
-        dims: list[int] = [128, 128],
         dropout_rate: float = 0.0,
     ):
         super().__init__()
         self.normalizer = PolyakNormalizer(input_shape)
         self.register_buffer("dropout_rate", t.tensor(dropout_rate))
         layers = []
-        last_dim = product(input_shape)
-        for dim in dims:
-            layers.append(nn.Dropout(self.dropout_rate))
-            layers.append(nn.Linear(last_dim, dim))
+        n_mid, m_mid = 8, 8
+        pre_head = 64
+        layers.append(DimWisePair(*input_shape, n_mid, m_mid))
+        for _ in range(1):
             layers.append(nn.ReLU())
-            # layers.append(nn.LayerNorm(dim))
-            last_dim = dim
+            layers.append(nn.Dropout(self.dropout_rate))
+            layers.append(DimWisePair(n_mid, m_mid, n_mid, m_mid))
+        last_dim = n_mid * m_mid
+        layers.append(nn.Flatten())
+        layers.append(nn.Linear(last_dim, pre_head))
+        layers.append(nn.ReLU())
         self.backbone = nn.Sequential(*layers)
         for layer in layers:
             if isinstance(layer, nn.Linear):
                 nn.init.orthogonal_(layer.weight)
                 nn.init.zeros_(layer.bias)
-        self.head = nn.Linear(last_dim, output_dim)
+        self.head = nn.Linear(pre_head, output_dim)
         nn.init.normal_(self.head.weight, std=1e-9)
         nn.init.zeros_(self.head.bias)
 
@@ -129,14 +132,11 @@ class MLPPolicy(nn.Module):
                 p.data.clamp_(-10, 10)
 
         if self.training:
-            state_normalized = self.normalizer.fit_transform(
-                state.unsqueeze(0)
-            ).squeeze(0)
+            state_normalized = self.normalizer.fit_transform(state.unsqueeze(0))
         else:
-            state_normalized = self.normalizer.transform(state.unsqueeze(0)).squeeze(0)
-        flat_state = state_normalized.flatten()
-        x = self.backbone(flat_state)
-        logits = self.head(x)
+            state_normalized = self.normalizer.transform(state.unsqueeze(0))
+        x = self.backbone(state_normalized)
+        logits = self.head(x).squeeze(0)
         logits.data.clamp_(-5, 5)
         unnormalized_position = (logits + noise_level * t.randn_like(logits)).exp()
         position = unnormalized_position / (unnormalized_position.sum() + 1)
@@ -578,14 +578,6 @@ def test_gradients():
     plt.close()
 
 
-def test_penalty():
-    env = PredictableEnv.create(1, 1, 100)
-    state, _ = env.reset_state()
-    action = t.tensor([-1.5])
-    state, reward, terminated, truncated, _ = env.step_t(action)
-    print(env._get_penalty().item())
-
-
 def test_normalizer():
     # Setup
     n_features = 3
@@ -631,8 +623,3 @@ def test_normalizer():
         # Assert the normalization worked
         assert t.all(final_mean.abs() < 0.1), "Means not close enough to 0"
         assert t.all((final_std - 1.0).abs() < 0.1), "Stds not close enough to 1"
-
-
-if __name__ == "__main__":
-    # test_penalty()
-    test_normalizer()
