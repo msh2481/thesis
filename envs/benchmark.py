@@ -30,13 +30,26 @@ def make_ema_tech(
 
 
 @typed
-def generate_random_walks(
-    n_steps: int, n_stocks: int
+def detrend(prices: Float[TT, "time_dim stock_dim"]) -> Float[TT, "time_dim stock_dim"]:
+    """Detrend prices."""
+    initial_prices = prices[0:1]
+    final_prices = prices[-1:]
+    trend_part = initial_prices * (final_prices / initial_prices).mean() ** (
+        t.linspace(0, 1, len(prices))[:, None]
+    )
+    return prices / trend_part
+
+
+@typed
+def gen_wiener(
+    n_steps: int, n_stocks: int, detrend: bool = False
 ) -> Float[TT, "time_dim stock_dim"]:
     """Generate price array with random walks."""
     price_array = t.randn((n_steps, n_stocks)) / n_steps**0.5
     price_array = t.cumsum(price_array, dim=0)
     price_array = t.exp(price_array)
+    if detrend:
+        price_array = detrend(price_array)
     return price_array
 
 
@@ -69,6 +82,17 @@ def gen_trend(n_steps: int, n_stocks: int) -> Float[TT, "time_dim stock_dim"]:
     return price_array
 
 
+def gen_pair_trading(
+    n_steps: int, n_stocks: int, alpha: float = 0.1
+) -> Float[TT, "time_dim stock_dim"]:
+    """Generate price array with pair trading."""
+    # 1 -> n_stocks here to remove mutual information
+    common = gen_wiener(n_steps, 1)
+    noise = gen_ma(n_steps, n_stocks)
+    result = common + alpha * noise
+    return result
+
+
 @typed
 def create_env(
     price_generator: Callable, n_steps: int, n_stocks: int, **kwargs
@@ -86,7 +110,7 @@ def assert_good_tensor(tensor: Float[TT, "..."]):
 
 
 def test_corner_cases():
-    env = create_env(generate_random_walks, 100, 2)
+    env = create_env(gen_wiener, 100, 2)
     state, _ = env.reset_state()
     assert_good_tensor(state.features())
 
@@ -105,5 +129,17 @@ def test_corner_cases():
             break
 
 
+def test_detrend():
+    price_array = gen_wiener(500, 5, detrend=True)
+    plt.plot(price_array)
+    plt.show()
+
+
+def test_pair_trading():
+    price_array = gen_pair_trading(300, 3, alpha=0.1)
+    plt.plot(price_array, lw=0.5)
+    plt.show()
+
+
 if __name__ == "__main__":
-    test_corner_cases()
+    test_pair_trading()

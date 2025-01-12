@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch as t
-from envs.benchmark import gen_ma, gen_trend, make_ema_tech
+from envs.benchmark import gen_ma, gen_pair_trading, gen_trend, make_ema_tech
 from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
 from models import fit_policy, MLPPolicy, rollout
@@ -14,12 +14,13 @@ from tqdm import tqdm
 # stocks_test = t.tensor(np.load("stocks_test.npy"), dtype=t.float32)
 # tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
 
-fn = gen_trend
-full_train_prices = fn(2000, 1)
-full_train_tech = make_ema_tech(full_train_prices)
+fn = gen_pair_trading
+periods = [1, 2, 4, 8, 16]
+full_train_prices = fn(2000, 3)
+full_train_tech = make_ema_tech(full_train_prices, periods=periods)
 full_train_env = DiffStockTradingEnv(full_train_prices, full_train_tech)
-full_val_prices = fn(10**5, 1)
-full_val_tech = make_ema_tech(full_val_prices)
+full_val_prices = fn(10**5, 3)
+full_val_tech = make_ema_tech(full_val_prices, periods=periods)
 full_val_env = DiffStockTradingEnv(full_val_prices, full_val_tech)
 
 
@@ -53,9 +54,9 @@ def train():
         batch_size=1,
         lr=1e-3,
         rollout_fn=rollout,
-        polyak_average=True,
+        polyak_average=False,
         max_weight=10.0,
-        dropout_rate=0.5,
+        dropout_rate=0.2,
         # init_from="checkpoints/tf.pth",
     )
 

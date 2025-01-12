@@ -302,6 +302,9 @@ def fit_policy(
         avg_returns = []
         avg_returns_ema = []
         last_avg_return = float("-inf")
+    else:
+        avg_returns = None
+        avg_returns_ema = None
 
     opt = CautiousAdamW(
         policy.parameters(),
@@ -318,8 +321,8 @@ def fit_policy(
     # Initialize validation tracking if needed
     val_returns = []
     val_returns_ema = []
-    val_avg_returns = []
-    val_avg_returns_ema = []
+    val_avg_returns = [] if polyak_average else None
+    val_avg_returns_ema = [] if polyak_average else None
 
     current_lr = lr
 
