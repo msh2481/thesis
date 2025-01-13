@@ -2,7 +2,7 @@ import gymnasium as gym
 import numpy as np
 import torch as t
 from beartype import beartype as typed
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, jaxtyped
 from numpy import ndarray as ND
 from torch import Tensor as TT
 
@@ -107,10 +107,10 @@ class State:
         )
 
 
-@typed
+@jaxtyped(typechecker=typed)
 def compute_optimal_1d(
-    prices: Float[TT, "stock_dim"],
-) -> tuple[Float[TT, ""], Float[TT, "stock_dim"]]:
+    prices: Float[TT, "time_dim"],
+) -> tuple[Float[TT, ""], Float[TT, "time_dim-1"]]:
     n = len(prices)
     # dp[prefix, position] = max amount of cash (for 0) /stock (for 1) in such state
     # it is before we traded on prices[prefix]
@@ -138,7 +138,7 @@ def compute_optimal_1d(
         positions.append(p)
         p = pr[i, p]
         i -= 1
-    return value, t.tensor(positions[::-1][1:], dtype=t.float32)
+    return value, t.tensor(positions[::-1][1:-1], dtype=t.float32)
 
 
 class DiffStockTradingEnv(gym.Env):
@@ -209,6 +209,14 @@ class DiffStockTradingEnv(gym.Env):
     def reset(self, seed: int | None = None) -> tuple[Features, dict]:
         state, info = self.reset_state(seed)
         return state.features(numpy=self.numpy, flat=self.flat), info
+
+    @typed
+    def get_optimal_positions(self) -> Float[TT, "time_dim stock_dim"]:
+        results = []
+        for i in range(self.stock_dim):
+            results.append(compute_optimal_1d(self.price_array[:, i])[1])
+        result = t.stack(results, dim=1)
+        return result / self.stock_dim
 
     @typed
     def subsegment(self, l: int, r: int) -> "DiffStockTradingEnv":

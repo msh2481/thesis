@@ -4,7 +4,7 @@ import torch as t
 from envs.benchmark import gen_ma, gen_pair_trading, gen_trend, make_ema_tech
 from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
-from models import fit_policy_on_pnl, MLPPolicy, rollout
+from models import fit_policy_on_optimal, fit_policy_on_pnl, MLPPolicy, rollout
 from tqdm import tqdm
 
 # stocks_new = t.tensor(np.load("stocks_new.npy"), dtype=t.float32)
@@ -53,22 +53,32 @@ def demo_env(**kwargs):
 
 
 def train():
-    model = fit_policy_on_pnl(
-        env_factory=train_env,
-        val_env_factory=val_env,
-        val_period=5,
+    # env_factory=train_env,
+    # val_env_factory=val_env,
+    # val_period=5,
+    # n_epochs=1000,
+    # batch_size=1,
+    # lr=1e-3,
+    # rollout_fn=rollout,
+    # polyak_average=False,
+    # dropout_rate=0.2,
+    # # init_from="checkpoints/tf.pth",
+    model = fit_policy_on_optimal(
+        policy=MLPPolicy(
+            full_train_env.observation_space.shape,
+            full_train_env.action_space.shape[0],
+            dropout_rate=0.2,
+        ),
         n_epochs=1000,
-        batch_size=1,
-        lr=1e-3,
-        rollout_fn=rollout,
-        polyak_average=False,
-        max_weight=10.0,
-        dropout_rate=0.2,
-        # init_from="checkpoints/tf.pth",
+        batch_size=64,
+        lr=1e-9,
+        full_train_env=full_train_env,
+        full_val_env=full_val_env,
+        val_length=1000,
     )
 
 
-def demo(it: int, avg: bool):
+def demo(it: int, avg: bool, show_optimal: bool = True):
     env = demo_env()
     steps = env.n_steps
     policy = MLPPolicy(
@@ -86,6 +96,9 @@ def demo(it: int, avg: bool):
         )
     policy.eval()
     state, _ = env.reset_state()
+    if show_optimal:
+        optimal_positions = env.get_optimal_positions()
+        logger.info(f"Optimal positions ({optimal_positions.shape}) ready")
 
     # Lists to store trajectory
     cash_history = []
@@ -97,10 +110,13 @@ def demo(it: int, avg: bool):
     initial_value = state.value().item()
 
     with t.no_grad():
-        for _ in range(steps):
-            action = policy.predict(
-                state.features(env.numpy, env.flat), noise_level=0.0
-            )
+        for step in range(steps):
+            if show_optimal:
+                action = optimal_positions[step]
+            else:
+                action = policy.predict(
+                    state.features(env.numpy, env.flat), noise_level=0.0
+                )
             state, reward, terminated, truncated, _ = env.make_step(action)
             # Store state information
             cash_history.append(state.cash.item())
