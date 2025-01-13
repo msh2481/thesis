@@ -7,7 +7,7 @@ from numpy import ndarray as ND
 from torch import Tensor as TT
 
 # TODO: add fee
-FEE_PCT = 0.0
+FEE_PCT = 2e-3
 
 Features = (
     Float[ND, "feature_dim"]
@@ -112,23 +112,23 @@ def compute_optimal_1d(
     prices: Float[TT, "stock_dim"],
 ) -> tuple[Float[TT, ""], Float[TT, "stock_dim"]]:
     n = len(prices)
-    # dp[prefix, position] = max amount of cash in such state
+    # dp[prefix, position] = max amount of cash (for 0) /stock (for 1) in such state
     # it is before we traded on prices[prefix]
     dp = t.full((n + 1, 2), -1e18, dtype=t.float32)
     pr = t.full((n + 1, 2), -1, dtype=t.int32)
-    dp[0, 0] = 0.0
+    dp[0, 0] = 1.0
     for i in range(n):
         sell_price = prices[i] * (1 - FEE_PCT)
         buy_price = prices[i] * (1 + FEE_PCT)
         updates = [
-            (0, 0, 0.0),  # stay zero
-            (1, 1, 0.0),  # stay long
+            (0, 0, 1.0),  # stay zero
+            (1, 1, 1.0),  # stay long
             (0, 1, sell_price),  # sell
-            (1, 0, -buy_price),  # buy
+            (1, 0, 1 / buy_price),  # buy
         ]
         for np, op, v in updates:
-            if dp[i + 1, np] < dp[i, op] + v:
-                dp[i + 1, np] = dp[i, op] + v
+            if dp[i + 1, np] < dp[i, op] * v:
+                dp[i + 1, np] = dp[i, op] * v
                 pr[i + 1, np] = op
     value = dp[n, 0]
     positions = t.full((n,), -1, dtype=t.float32)
