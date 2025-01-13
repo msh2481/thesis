@@ -3,7 +3,7 @@ import numpy as np
 import torch as t
 from beartype import beartype as typed
 from beartype.typing import Callable
-from envs.diff_stock_trading_env import DiffStockTradingEnv
+from envs.diff_stock_trading_env import compute_optimal_1d, DiffStockTradingEnv
 from jaxtyping import Float
 from loguru import logger
 from torch import Tensor as TT
@@ -84,11 +84,11 @@ def gen_trend(n_steps: int, n_stocks: int) -> Float[TT, "time_dim stock_dim"]:
 
 
 def gen_pair_trading(
-    n_steps: int, n_stocks: int, alpha: float = 0.0
+    n_steps: int, n_stocks: int, alpha: float = 0.1
 ) -> Float[TT, "time_dim stock_dim"]:
     """Generate price array with pair trading."""
     # 1 -> n_stocks here to remove mutual information
-    common = gen_wiener(n_steps, n_stocks)
+    common = gen_wiener(n_steps, 1)
     noise = gen_ma(n_steps, n_stocks)
     result = common + alpha * noise
     return result
@@ -142,5 +142,48 @@ def test_pair_trading():
     plt.show()
 
 
+def test_optimal_1d():
+    prices = gen_wiener(100, 1)[:, 0]
+    value, positions = compute_optimal_1d(prices)
+    env = DiffStockTradingEnv(
+        prices[:, None],
+        t.zeros_like(prices)[:, None, None],
+        initial_position=t.zeros((1,)),
+    )
+    env.reset_state()
+    # compute returns using env
+    returns = t.zeros_like(prices)
+    for i in range(len(prices) - 1):
+        returns[i] = env.make_step(positions[i + 1, None])[1]
+    cumreturns = t.cumsum(returns, dim=0)
+    env_value = env.state.value()
+    logger.info(
+        f"Optimal value: {value.item():.2f} | Env value: {env_value.item():.2f}"
+    )
+
+    plt.figure(figsize=(12, 8))
+
+    plt.subplot(3, 1, 1)
+    plt.plot(prices, label="Prices")
+    plt.grid(True)
+    plt.legend()
+    plt.title("Prices")
+
+    plt.subplot(3, 1, 2)
+    plt.plot(positions, label="Positions")
+    plt.grid(True)
+    plt.legend()
+    plt.title("Positions")
+
+    plt.subplot(3, 1, 3)
+    plt.plot(cumreturns, label="Returns")
+    plt.grid(True)
+    plt.legend()
+    plt.title("Returns")
+
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
-    test_pair_trading()
+    test_optimal_1d()

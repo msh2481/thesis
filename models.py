@@ -253,7 +253,7 @@ def plot_returns(
 
 
 @typed
-def fit_policy(
+def fit_policy_on_pnl(
     env_factory: Callable[[], DiffStockTradingEnv],
     n_epochs: int = 1000,
     batch_size: int = 1,

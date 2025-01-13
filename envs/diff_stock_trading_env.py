@@ -6,6 +6,9 @@ from jaxtyping import Float, Int
 from numpy import ndarray as ND
 from torch import Tensor as TT
 
+# TODO: add fee
+FEE_PCT = 0.0
+
 Features = (
     Float[ND, "feature_dim"]
     | Float[TT, "feature_dim"]
@@ -84,8 +87,10 @@ class State:
         assert position.sum() <= 1.0, f"Position sum: {position.sum()}"
         assert position.min() >= 0.0, f"Position min: {position.min()}"
         value = self.value()
-        self.stocks = position * value / self.prices
-        self.cash = (1 - position.sum()) * value
+        fee = (position * value - self.stocks * self.prices).abs() * FEE_PCT
+        new_value = value - fee.sum()
+        self.stocks = position * new_value / self.prices
+        self.cash = (1 - position.sum()) * new_value
 
     @typed
     def set_prices(self, prices: Float[TT, "stock_dim"]) -> None:
@@ -102,6 +107,40 @@ class State:
         )
 
 
+@typed
+def compute_optimal_1d(
+    prices: Float[TT, "stock_dim"],
+) -> tuple[Float[TT, ""], Float[TT, "stock_dim"]]:
+    n = len(prices)
+    # dp[prefix, position] = max amount of cash in such state
+    # it is before we traded on prices[prefix]
+    dp = t.full((n + 1, 2), -1e18, dtype=t.float32)
+    pr = t.full((n + 1, 2), -1, dtype=t.int32)
+    dp[0, 0] = 0.0
+    for i in range(n):
+        sell_price = prices[i] * (1 - FEE_PCT)
+        buy_price = prices[i] * (1 + FEE_PCT)
+        updates = [
+            (0, 0, 0.0),  # stay zero
+            (1, 1, 0.0),  # stay long
+            (0, 1, sell_price),  # sell
+            (1, 0, -buy_price),  # buy
+        ]
+        for np, op, v in updates:
+            if dp[i + 1, np] < dp[i, op] + v:
+                dp[i + 1, np] = dp[i, op] + v
+                pr[i + 1, np] = op
+    value = dp[n, 0]
+    positions = t.full((n,), -1, dtype=t.float32)
+    i = n
+    p = 0
+    while i > 0:
+        p = pr[i, p]
+        i -= 1
+        positions[i] = p
+    return value, positions
+
+
 class DiffStockTradingEnv(gym.Env):
     """A stock trading environment for reinforcement learning."""
 
@@ -112,8 +151,6 @@ class DiffStockTradingEnv(gym.Env):
         tech_array: Float[TT, "time_dim stock_dim tech_dim"],
         initial_value: Float[TT, ""] = t.ones(()),
         initial_position: Float[TT, "stock_dim"] | None = None,
-        buy_cost_pct: float = 1e-3,
-        sell_cost_pct: float = 1e-3,
         numpy: bool = False,
         flat: bool = False,
     ) -> None:
@@ -126,8 +163,6 @@ class DiffStockTradingEnv(gym.Env):
             if initial_position is not None
             else t.ones(self.stock_dim) / (self.stock_dim + 1)
         )
-        self.buy_cost_pct = buy_cost_pct
-        self.sell_cost_pct = sell_cost_pct
         self.numpy = numpy
         self.flat = flat
         self.env_name = "DiffStockTradingEnv"
@@ -186,8 +221,6 @@ class DiffStockTradingEnv(gym.Env):
             tech_array=self.tech_array[l : r + 1],
             initial_value=self.initial_value,
             initial_position=self.initial_position,
-            buy_cost_pct=self.buy_cost_pct,
-            sell_cost_pct=self.sell_cost_pct,
             numpy=self.numpy,
             flat=self.flat,
         )

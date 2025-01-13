@@ -4,7 +4,7 @@ import torch as t
 from envs.benchmark import gen_ma, gen_pair_trading, gen_trend, make_ema_tech
 from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
-from models import fit_policy, MLPPolicy, rollout
+from models import fit_policy_on_pnl, MLPPolicy, rollout
 from tqdm import tqdm
 
 # stocks_new = t.tensor(np.load("stocks_new.npy"), dtype=t.float32)
@@ -46,14 +46,14 @@ def val_env(**kwargs):
 
 
 def demo_env(**kwargs):
-    demo_length = 1000
+    demo_length = 100
     l = np.random.randint(0, full_val_env.price_array.shape[0] - demo_length)
     r = l + demo_length
     return full_val_env.subsegment(l, r)
 
 
 def train():
-    model = fit_policy(
+    model = fit_policy_on_pnl(
         env_factory=train_env,
         val_env_factory=val_env,
         val_period=5,
