@@ -45,9 +45,10 @@ def gen_wiener(
     n_steps: int, n_stocks: int, detrend: bool = False
 ) -> Float[TT, "time_dim stock_dim"]:
     """Generate price array with random walks."""
-    price_array = t.randn((n_steps, n_stocks)) / n_steps**0.5
-    price_array = t.cumsum(price_array, dim=0)
-    price_array = t.exp(price_array)
+    price_array = (1 + t.randn((n_steps, n_stocks)) / n_steps**0.5).log()
+    price_array = t.cumsum(price_array, dim=0).exp()
+    start_price = max(10, 5 - price_array.min())
+    price_array += start_price
     if detrend:
         price_array = detrend(price_array)
     return price_array
@@ -83,11 +84,11 @@ def gen_trend(n_steps: int, n_stocks: int) -> Float[TT, "time_dim stock_dim"]:
 
 
 def gen_pair_trading(
-    n_steps: int, n_stocks: int, alpha: float = 0.1
+    n_steps: int, n_stocks: int, alpha: float = 0.0
 ) -> Float[TT, "time_dim stock_dim"]:
     """Generate price array with pair trading."""
     # 1 -> n_stocks here to remove mutual information
-    common = gen_wiener(n_steps, 1)
+    common = gen_wiener(n_steps, n_stocks)
     noise = gen_ma(n_steps, n_stocks)
     result = common + alpha * noise
     return result
@@ -136,7 +137,7 @@ def test_detrend():
 
 
 def test_pair_trading():
-    price_array = gen_pair_trading(300, 3, alpha=0.1)
+    price_array = gen_pair_trading(300, 30, alpha=0.1)
     plt.plot(price_array, lw=0.5)
     plt.show()
 
