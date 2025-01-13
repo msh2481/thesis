@@ -131,14 +131,14 @@ def compute_optimal_1d(
                 dp[i + 1, np] = dp[i, op] * v
                 pr[i + 1, np] = op
     value = dp[n, 0]
-    positions = t.full((n,), -1, dtype=t.float32)
-    i = n
+    positions = []
     p = 0
-    while i > 0:
+    i = n
+    while i >= 0:
+        positions.append(p)
         p = pr[i, p]
         i -= 1
-        positions[i] = p
-    return value, positions
+    return value, t.tensor(positions[::-1][1:], dtype=t.float32)
 
 
 class DiffStockTradingEnv(gym.Env):

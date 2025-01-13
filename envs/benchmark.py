@@ -154,7 +154,7 @@ def test_optimal_1d():
     # compute returns using env
     returns = t.zeros_like(prices)
     for i in range(len(prices) - 1):
-        returns[i] = env.make_step(positions[i + 1, None])[1]
+        returns[i] = env.make_step(positions[i, None])[1]
     cumreturns = t.cumsum(returns, dim=0)
     env_value = env.state.value()
     logger.info(
