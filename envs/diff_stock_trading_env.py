@@ -6,7 +6,6 @@ from jaxtyping import Float, Int, jaxtyped
 from numpy import ndarray as ND
 from torch import Tensor as TT
 
-# TODO: add fee
 FEE_PCT = 2e-3
 
 Features = (
@@ -96,9 +95,12 @@ class State:
         self.cash = (1 - position.sum()) * new_value
 
     @typed
-    def set_prices(self, prices: Float[TT, "stock_dim"]) -> None:
+    def set_prices_and_tech(
+        self, prices: Float[TT, "stock_dim"], tech: Float[TT, "stock_dim tech_dim"]
+    ) -> None:
         assert prices.shape == (self.stock_dim,)
         self.prices = prices
+        self.tech = tech
 
     @typed
     def detach(self) -> "State":
@@ -243,7 +245,9 @@ class DiffStockTradingEnv(gym.Env):
         """Take an action in the environment."""
         self.time += 1
         self.state.set_position(new_position)
-        self.state.set_prices(self.price_array[self.time])
+        self.state.set_prices_and_tech(
+            self.price_array[self.time], self.tech_array[self.time]
+        )
 
         new_log_value = self.state.value().log()
         reward = new_log_value - self.last_log_value

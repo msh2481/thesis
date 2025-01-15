@@ -53,32 +53,33 @@ def demo_env(**kwargs):
 
 
 def train():
-    # env_factory=train_env,
-    # val_env_factory=val_env,
-    # val_period=5,
-    # n_epochs=1000,
-    # batch_size=1,
-    # lr=1e-3,
-    # rollout_fn=rollout,
-    # polyak_average=False,
-    # dropout_rate=0.2,
-    # # init_from="checkpoints/tf.pth",
-    model = fit_policy_on_optimal(
-        policy=MLPPolicy(
-            full_train_env.observation_space.shape,
-            full_train_env.action_space.shape[0],
-            dropout_rate=0.2,
-        ),
+    model = fit_policy_on_pnl(
+        env_factory=train_env,
+        val_env_factory=val_env,
+        val_period=5,
         n_epochs=1000,
-        batch_size=128,
+        batch_size=1,
         lr=1e-4,
-        full_train_env=full_train_env,
-        full_val_env=full_val_env,
-        val_length=1000,
+        dropout_rate=0.0,
+        init_from="checkpoints/policy_supervised_500.pth",
     )
 
+    # model = fit_policy_on_optimal(
+    #     policy=MLPPolicy(
+    #         full_train_env.observation_space.shape,
+    #         full_train_env.action_space.shape[0],
+    #         dropout_rate=0.0,
+    #     ),
+    #     n_epochs=1000,
+    #     batch_size=128,
+    #     lr=1e-4,
+    #     full_train_env=full_train_env,
+    #     full_val_env=full_val_env,
+    #     val_length=1000,
+    # )
 
-def demo(it: int, avg: bool, show_optimal: bool = True):
+
+def demo(it: int, avg: bool, show_optimal: bool = False):
     env = demo_env()
     steps = env.n_steps
     policy = MLPPolicy(
@@ -87,12 +88,13 @@ def demo(it: int, avg: bool, show_optimal: bool = True):
         dropout_rate=0.9,
     )
     if avg:
+        assert False
         policy.load_state_dict(
             t.load(f"checkpoints/avg_policy_{it}.pth", weights_only=False)
         )
     else:
         policy.load_state_dict(
-            t.load(f"checkpoints/policy_{it}.pth", weights_only=False)
+            t.load(f"checkpoints/policy_pnl_{it}.pth", weights_only=False)
         )
     policy.eval()
     state, _ = env.reset_state()

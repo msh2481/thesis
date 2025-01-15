@@ -1,3 +1,4 @@
+import numpy as np
 import torch as t
 from beartype import beartype as typed
 from beartype.typing import Callable
@@ -112,7 +113,7 @@ class MLPPolicy(nn.Module):
         for _ in range(n_layers):
             layers.append(StockBlock(stock_dim, tech_dim, tech_dim, True))
             layers.append(nn.Dropout(self.dropout_rate))
-        layers.append(DimWiseLinear(tech_dim, 1, dim=1, bias=True, gain=1.0))
+        layers.append(DimWiseLinear(tech_dim, 1, dim=1, bias=True, gain=1e-3))
         layers.append(nn.Flatten())
         self.backbone = nn.Sequential(*layers)
 
@@ -343,23 +344,88 @@ def train_batch_pnl(
 @typed
 def fit_policy_on_pnl(
     env_factory: Callable[[], DiffStockTradingEnv],
-    policy: MLPPolicy,
-    rollout_fn: Callable[[MLPPolicy, DiffStockTradingEnv, float], Float[TT, ""]],
-    batch_size: int,
-    noise_level: float,
-) -> tuple[Float[TT, ""], Float[TT, ""]]:
+    val_env_factory: Callable[[], DiffStockTradingEnv] | None = None,
+    n_epochs: int = 1000,
+    batch_size: int = 1,
+    lr: float = 1e-3,
+    val_period: int = 5,
+    dropout_rate: float = 0.0,
+    init_from: str | None = None,
+) -> MLPPolicy:
+    # Initialize environment and policy
     env = env_factory()
-    episode_returns = []
-    for _ in range(batch_size):
-        episode_return = rollout_fn(policy, env, noise_level)
-        episode_returns.append(episode_return)
-
-    return_tensors = t.tensor(episode_returns)
-    mean_return = (sum(episode_returns) / batch_size).clamp(-100, None)
-    std_return = (
-        return_tensors.detach().std() if len(return_tensors) > 1 else t.tensor(0.0)
+    policy = MLPPolicy(
+        env.observation_space.shape,
+        env.action_space.shape[0],
+        dropout_rate=dropout_rate,
     )
-    return mean_return, std_return
+
+    if init_from is not None:
+        policy.load_state_dict(t.load(init_from))
+
+    opt = CautiousAdamW(policy.parameters(), lr=lr)
+    scheduler = t.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=0.95)
+
+    pbar = tqdm(range(n_epochs))
+    train_returns = []
+    train_stds = []
+    train_returns_ema = []
+    val_returns = []
+    val_returns_ema = []
+
+    ema = EMA(alpha=0.9)
+
+    for epoch in pbar:
+        # Training
+        policy.train()
+        mean_return, std_return = train_batch_pnl(
+            env_factory, policy, rollout, batch_size, noise_level=0.0
+        )
+        train_returns.append(mean_return.item())
+        train_stds.append(std_return.item())
+        ema.update("train_return", mean_return)
+        train_returns_ema.append(ema["train_return"].item())
+
+        # Compute gradients and update
+        (-mean_return).backward()
+        opt.step()
+        opt.zero_grad()
+        scheduler.step()
+
+        # Validation
+        if val_env_factory is not None and epoch % val_period == 0:
+            policy.eval()
+            with t.no_grad():
+                val_return, _ = train_batch_pnl(
+                    val_env_factory, policy, rollout, batch_size, noise_level=0.0
+                )
+                val_returns.append(val_return.item())
+                ema.update("val_return", val_return)
+                val_returns_ema.append(ema["val_return"].item())
+
+        # Update progress bar
+        postfix = {
+            "train_return": f"{mean_return.item():.3e}",
+            "train_std": f"{std_return.item():.3e}",
+        }
+        if val_returns:
+            postfix["val_return"] = f"{val_returns[-1]:.3e}"
+        pbar.set_postfix(**postfix)
+
+        # Save model and plot periodically
+        if epoch % 10 == 0:
+            t.save(policy.state_dict(), f"checkpoints/policy_pnl_{epoch}.pth")
+
+            plot_returns(
+                returns=train_returns,
+                returns_ema=train_returns_ema,
+                return_stds=train_stds,
+                val_returns=val_returns,
+                val_returns_ema=val_returns_ema,
+                val_period=val_period,
+            )
+
+    return policy
 
 
 @typed
@@ -393,6 +459,8 @@ def fit_policy_on_optimal(
     pbar = tqdm(range(n_epochs))
     train_losses = []
     val_losses = []
+    train_pnls = []
+    val_pnls = []
 
     def eval_pnl(env):
         policy.eval()
@@ -407,8 +475,6 @@ def fit_policy_on_optimal(
         for X_batch, y_batch in train_loader:
             opt.zero_grad()
             pred = policy.predict_batch(X_batch, noise_level=0.0)
-            if t.isnan(pred).any():
-                logger.warning(f"NaN predicted values: {pred.shape}")
             loss = t.nn.functional.mse_loss(pred, y_batch)
             loss.backward()
             opt.step()
@@ -432,11 +498,12 @@ def fit_policy_on_optimal(
         scheduler.step()
 
         # Evaluate PnL metrics
-        train_pnl = 0.0
-        val_pnl = 0.0
-        # train_pnl = eval_pnl(full_train_env.subsegment(0, val_length))
-        # if full_val_env is not None:
-        #     val_pnl = eval_pnl(full_val_env.subsegment(0, val_length))
+        if epoch % 50 == 0:
+            train_pnl = eval_pnl(full_train_env.subsegment(0, val_length))
+            train_pnls.append(train_pnl)
+            if full_val_env is not None:
+                val_pnl = eval_pnl(full_val_env.subsegment(0, val_length))
+                val_pnls.append(val_pnl)
 
         # Update progress bar
         postfix = {
@@ -455,12 +522,25 @@ def fit_policy_on_optimal(
 
             # Plot losses
             plt.figure(figsize=(10, 5))
-            plt.plot(train_losses, label="Train Loss")
+            plt.subplot(2, 1, 1)
+            plt.plot(
+                np.arange(len(train_losses)) * 10, train_losses, label="Train Loss"
+            )
             if val_losses:
-                plt.plot(val_losses, label="Val Loss")
+                plt.plot(np.arange(len(val_losses)) * 10, val_losses, label="Val Loss")
             plt.yscale("log")
             plt.grid(True)
             plt.legend()
+            plt.title("Training and Validation Losses")
+            plt.tight_layout()
+            plt.subplot(2, 1, 2)
+            plt.plot(np.arange(len(train_pnls)) * 50, train_pnls, label="Train PnL")
+            if val_pnls:
+                plt.plot(np.arange(len(val_pnls)) * 50, val_pnls, label="Val PnL")
+            plt.grid(True)
+            plt.legend()
+            plt.title("Training and Validation PnL")
+            plt.tight_layout()
             plt.savefig("logs/supervised_training.png")
             plt.close()
 
@@ -521,15 +601,21 @@ def env_to_dataset(
     states = []
     y = env.get_optimal_positions()
     state, _ = env.reset()
-    states.append(state)
+    states.append(state.clone())
     for action in y:
         state, reward, terminated, truncated, _ = env.step(action)
-        states.append(state)
+        states.append(state.clone())
         if terminated or truncated:
             break
     states = t.stack(states)
-    logger.warning(f"States shape: {states.shape}")
-    logger.warning(f"Y shape: {y.shape}")
+    logger.warning(f"States shape: {states.shape} | Targets shape: {y.shape}")
+    logger.warning(f"State std by column: {states.std(dim=0)}")
+    logger.warning(f"Target std by column: {y.std(dim=0)}")
+    # sample_indices = t.randint(0, states.size(0), (10,))
+    # for ind in sample_indices:
+    #     logger.debug("--------------------------------")
+    #     logger.debug(f"Target {ind}: {y[ind].numpy()}")
+    #     logger.debug(f"State {ind}: {states[ind].numpy()}")
     X_nan = t.isnan(states).any(dim=1)
     Y_nan = t.isnan(y)
     if X_nan.any():
