@@ -21,7 +21,7 @@ from tqdm import tqdm
 # full_val_tech = make_ema_tech(full_val_prices, periods=[1, 2, 4, 8, 16])
 # full_val_env = DiffStockTradingEnv(full_val_prices, full_val_tech)
 
-fn = gen_pair_trading
+fn = gen_trend
 periods = [1, 2, 4, 8, 16]
 full_train_prices = fn(2000, 3)
 full_train_tech = make_ema_tech(full_train_prices, periods=periods)
