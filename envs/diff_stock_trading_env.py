@@ -25,7 +25,9 @@ def logits_to_position(logits: Float[TT, "stock_dim"]) -> Float[TT, "stock_dim"]
 
 @typed
 def position_to_logits(position: Float[TT, "stock_dim"]) -> Float[TT, "stock_dim"]:
-    position = position / (1 - position.sum())
+    s = position.sum()
+    assert s <= (1 + 1e-4), f"Position sum: {s}"
+    position = (position + 1e-8) / max(1 - s, 1e-8)
     return position.log()
 
 
@@ -74,6 +76,7 @@ class State:
     def features(self, numpy: bool = False, flat: bool = False) -> Features:
         position = self.position()
         logits = position_to_logits(position)
+        assert not t.isnan(logits).any(), "NaN logits"
         features = t.cat([self.prices[:, None], logits[:, None], self.tech], dim=1)
         if flat:
             features = features.flatten()

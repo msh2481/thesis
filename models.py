@@ -34,7 +34,9 @@ class PolyakNormalizer(nn.Module):
         batch = batch[~t.isnan(batch).any(dim=tuple(range(1, batch.ndim)))]
         new_size = batch.size(0)
         if new_size < initial_size:
-            logger.warning(f"Dropped {initial_size - new_size} samples with NaN")
+            logger.warning(
+                f"Dropped {initial_size - new_size} samples with NaN out of {batch.shape} ({new_size} left)"
+            )
         if not new_size:
             return
         assert not t.isnan(batch).any()
@@ -61,7 +63,11 @@ class PolyakNormalizer(nn.Module):
     def transform(
         self, batch: Float[TT, "batch_size ..."]
     ) -> Float[TT, "batch_size ..."]:
-        return (batch - self.mean.unsqueeze(0)) / (self.std.unsqueeze(0))
+        mu = self.mean.unsqueeze(0)
+        sigma = self.std.unsqueeze(0)
+        assert not t.isnan(mu).any(), f"NaN mean: {mu.shape}"
+        assert not t.isnan(sigma).any(), f"NaN std: {sigma.shape}"
+        return (batch - mu) / sigma
 
     @typed
     def fit_transform(
@@ -106,7 +112,7 @@ class MLPPolicy(nn.Module):
         for _ in range(n_layers):
             layers.append(StockBlock(stock_dim, tech_dim, tech_dim, True))
             layers.append(nn.Dropout(self.dropout_rate))
-        layers.append(DimWiseLinear(tech_dim, 1, dim=1, bias=True, gain=1e-4))
+        layers.append(DimWiseLinear(tech_dim, 1, dim=1, bias=True, gain=1.0))
         layers.append(nn.Flatten())
         self.backbone = nn.Sequential(*layers)
 
@@ -127,10 +133,14 @@ class MLPPolicy(nn.Module):
                     p.data = t.where(t.isnan(p.data), t.zeros_like(p.data), p.data)
                 p.data.clamp_(-10, 10)
 
+        if t.isnan(state).any():
+            logger.warning(f"NaN state: {state.shape}")
         if self.training:
             state_normalized = self.normalizer.fit_transform(state)
         else:
             state_normalized = self.normalizer.transform(state)
+        if t.isnan(state_normalized).any():
+            logger.warning(f"NaN state_normalized: {state_normalized.shape}")
         logits = self.backbone(state_normalized)
         logits.data.clamp_(-5, 5)
         unnormalized_position = (logits + noise_level * t.randn_like(logits)).exp()
@@ -142,24 +152,68 @@ class MLPPolicy(nn.Module):
 
 def test_gradients():
     # mu gradients should be the same, sigma gradients should be None for mode
-    policy = MLPPolicy(2, 2)
+    policy = MLPPolicy((2, 2), 2)
     opt = t.optim.Adam(policy.parameters(), lr=1e-3)
-    state = t.randn(2)
-    # test stochastic
-    action = policy.predict(state, noise_level=1.0)
-    print(action)
-    loss = action.sum()
-    loss.backward()
-    print(policy.mu_head.weight.grad.flatten()[:10])
-    print(policy.sigma_head.weight.grad.flatten()[:10])
-    opt.zero_grad()
-    # test deterministic
-    action = policy.predict(state, noise_level=0.0)
-    print(action)
-    loss = action.sum()
-    loss.backward()
-    print(policy.mu_head.weight.grad.flatten()[:10])
-    print(policy.sigma_head.weight.grad)
+    n_steps = 100
+
+    grad_history = {}
+    for name, _ in policy.named_parameters():
+        grad_history[name] = []
+    true_action = t.tensor([0.0, 0.33])
+
+    for step in range(n_steps):
+        # Generate random state and target each time
+        state = t.randn(2, 2)
+
+        # Test stochastic
+        action = policy.predict(state, noise_level=1.0)
+        loss = (action - true_action).square().sum()
+        loss.backward()
+
+        # Track gradients
+        for name, param in policy.named_parameters():
+            if param.grad is not None:
+                assert not t.isnan(
+                    param.grad
+                ).any(), f"NaN detected in {name} gradients at step {step}"
+                grad_history[name].append(param.grad.norm().item())
+
+        opt.step()
+        opt.zero_grad()
+
+        # Test deterministic
+        action = policy.predict(state, noise_level=0.0)
+        loss = (action - true_action).square().sum()
+        loss.backward()
+
+        for name, param in policy.named_parameters():
+            if param.grad is not None:
+                assert not t.isnan(
+                    param.grad
+                ).any(), f"NaN detected in {name} gradients at step {step}"
+
+        opt.step()
+        opt.zero_grad()
+
+        if step % 10 == 0:
+            logger.info(f"Step {step}, Loss: {loss.item():.3f}")
+            for name, grads in grad_history.items():
+                if grads:
+                    logger.info(f"{name} grad norm: {grads[-1]:.3e}")
+
+    # Plot gradient norms over time
+    plt.figure(figsize=(10, 5))
+    for name, grads in grad_history.items():
+        if grads:
+            plt.plot(grads, label=name)
+    plt.yscale("log")
+    plt.xlabel("Step")
+    plt.ylabel("Gradient Norm")
+    plt.title("Gradient Norms During Training")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig("logs/gradient_test.png")
+    plt.close()
 
 
 @typed
@@ -353,6 +407,8 @@ def fit_policy_on_optimal(
         for X_batch, y_batch in train_loader:
             opt.zero_grad()
             pred = policy.predict_batch(X_batch, noise_level=0.0)
+            if t.isnan(pred).any():
+                logger.warning(f"NaN predicted values: {pred.shape}")
             loss = t.nn.functional.mse_loss(pred, y_batch)
             loss.backward()
             opt.step()
@@ -376,10 +432,11 @@ def fit_policy_on_optimal(
         scheduler.step()
 
         # Evaluate PnL metrics
-        train_pnl = eval_pnl(full_train_env.subsegment(0, val_length))
-        val_pnl = None
-        if full_val_env is not None:
-            val_pnl = eval_pnl(full_val_env.subsegment(0, val_length))
+        train_pnl = 0.0
+        val_pnl = 0.0
+        # train_pnl = eval_pnl(full_train_env.subsegment(0, val_length))
+        # if full_val_env is not None:
+        #     val_pnl = eval_pnl(full_val_env.subsegment(0, val_length))
 
         # Update progress bar
         postfix = {
@@ -473,4 +530,15 @@ def env_to_dataset(
     states = t.stack(states)
     logger.warning(f"States shape: {states.shape}")
     logger.warning(f"Y shape: {y.shape}")
+    X_nan = t.isnan(states).any(dim=1)
+    Y_nan = t.isnan(y)
+    if X_nan.any():
+        logger.warning(f"NaN states: {X_nan.sum()}. Indices: {X_nan.nonzero()}")
+    if Y_nan.any():
+        logger.warning(f"NaN y: {Y_nan.sum()}. Indices: {Y_nan.nonzero()}")
+
     return states[:-1], y
+
+
+if __name__ == "__main__":
+    test_gradients()

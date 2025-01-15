@@ -26,7 +26,7 @@ periods = [1, 2, 4, 8, 16]
 full_train_prices = fn(2000, 3)
 full_train_tech = make_ema_tech(full_train_prices, periods=periods)
 full_train_env = DiffStockTradingEnv(full_train_prices, full_train_tech)
-full_val_prices = fn(10**5, 3)
+full_val_prices = fn(10**4, 3)
 full_val_tech = make_ema_tech(full_val_prices, periods=periods)
 full_val_env = DiffStockTradingEnv(full_val_prices, full_val_tech)
 
@@ -70,8 +70,8 @@ def train():
             dropout_rate=0.2,
         ),
         n_epochs=1000,
-        batch_size=64,
-        lr=1e-9,
+        batch_size=128,
+        lr=1e-4,
         full_train_env=full_train_env,
         full_val_env=full_val_env,
         val_length=1000,
