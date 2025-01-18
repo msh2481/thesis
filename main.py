@@ -56,7 +56,7 @@ def demo_env(**kwargs):
 
 USE_PNL = None
 N_LAYERS = 2
-DROPOUT = 0.2
+DROPOUT = 0.1
 
 
 def train():
@@ -67,10 +67,10 @@ def train():
             val_period=5,
             n_epochs=1000,
             batch_size=1,
-            lr=1e-4,
+            lr=1e-3,
             n_layers=N_LAYERS,
             dropout_rate=DROPOUT,
-            # init_from="checkpoints/policy_supervised_500.pth",
+            init_from="checkpoints/policy_supervised_500.pth",
         )
     else:
         model = fit_policy_on_optimal(
