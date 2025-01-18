@@ -4,10 +4,14 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch as t
 import yfinance as yf
 from beartype import beartype
 from beartype.typing import List, Optional, Union
+from jaxtyping import Float
 from loguru import logger
+from numpy import ndarray as ND
+from torch import Tensor as TT
 
 
 @beartype
@@ -93,7 +97,9 @@ def save_stock_data(
 
 
 @beartype
-def load_stock_data(filename: str) -> np.ndarray:
+def load_stock_data(
+    filename: str, numpy: bool = False
+) -> Float[ND, "timesteps stocks"] | Float[TT, "timesteps stocks"]:
     """
     Load stock data from CSV and return numpy array of values.
 
@@ -104,7 +110,11 @@ def load_stock_data(filename: str) -> np.ndarray:
         Numpy array of shape (n_timesteps, n_stocks)
     """
     df = pd.read_csv(filename, index_col=0, parse_dates=True)
-    return df.values
+    data = df.values
+    if numpy:
+        return data
+    else:
+        return t.tensor(data, dtype=t.float32)
 
 
 @beartype

@@ -253,7 +253,7 @@ def plot_returns(
     plt.close()
     plt.clf()
 
-    n_plots = 3 if val_returns else 2
+    n_plots = 2 if val_returns else 1
 
     plt.figure(figsize=(10, 10))
     # Training returns plot
@@ -349,6 +349,7 @@ def fit_policy_on_pnl(
     batch_size: int = 1,
     lr: float = 1e-3,
     val_period: int = 5,
+    n_layers: int = 1,
     dropout_rate: float = 0.0,
     init_from: str | None = None,
 ) -> MLPPolicy:
@@ -358,8 +359,10 @@ def fit_policy_on_pnl(
         env.observation_space.shape,
         env.action_space.shape[0],
         dropout_rate=dropout_rate,
+        n_layers=n_layers,
     )
-
+    n_params = sum(p.numel() for p in policy.parameters())
+    logger.warning(f"#params = {n_params}")
     if init_from is not None:
         policy.load_state_dict(t.load(init_from))
 
@@ -438,6 +441,10 @@ def fit_policy_on_optimal(
     full_val_env: DiffStockTradingEnv | None = None,
     val_length: int = 1000,
 ):
+    n_params = sum(p.numel() for p in policy.parameters())
+    logger.debug(f"policy:\n{policy}")
+    logger.warning(f"#params = {n_params}")
+
     X_train, y_train = env_to_dataset(full_train_env)
     train_dataset = t.utils.data.TensorDataset(X_train, y_train)
     train_loader = t.utils.data.DataLoader(
@@ -523,11 +530,9 @@ def fit_policy_on_optimal(
             # Plot losses
             plt.figure(figsize=(10, 5))
             plt.subplot(2, 1, 1)
-            plt.plot(
-                np.arange(len(train_losses)) * 10, train_losses, label="Train Loss"
-            )
+            plt.plot(np.arange(len(train_losses)), train_losses, label="Train Loss")
             if val_losses:
-                plt.plot(np.arange(len(val_losses)) * 10, val_losses, label="Val Loss")
+                plt.plot(np.arange(len(val_losses)), val_losses, label="Val Loss")
             plt.yscale("log")
             plt.grid(True)
             plt.legend()

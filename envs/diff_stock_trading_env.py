@@ -6,7 +6,7 @@ from jaxtyping import Float, Int, jaxtyped
 from numpy import ndarray as ND
 from torch import Tensor as TT
 
-FEE_PCT = 2e-3
+FEE_PCT = 1e-3
 
 Features = (
     Float[ND, "feature_dim"]

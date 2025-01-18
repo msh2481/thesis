@@ -1,82 +1,92 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch as t
-from envs.benchmark import gen_ma, gen_pair_trading, gen_trend, make_ema_tech
+from data_processing import load_stock_data
+from envs.benchmark import detrend, gen_ma, gen_pair_trading, gen_trend, make_ema_tech
 from envs.diff_stock_trading_env import DiffStockTradingEnv
 from loguru import logger
 from models import fit_policy_on_optimal, fit_policy_on_pnl, MLPPolicy, rollout
 from tqdm import tqdm
 
-# stocks_new = t.tensor(np.load("stocks_new.npy"), dtype=t.float32)
-# tech_new = t.tensor(np.load("tech_new.npy"), dtype=t.float32)
-# stocks_old = t.tensor(np.load("stocks_old.npy"), dtype=t.float32)
-# tech_old = t.tensor(np.load("tech_old.npy"), dtype=t.float32)
-# stocks_test = t.tensor(np.load("stocks_test.npy"), dtype=t.float32)
-# tech_test = t.tensor(np.load("tech_test.npy"), dtype=t.float32)
+stocks_new = detrend(load_stock_data("data/stocks_new.csv"))
+stocks_old = detrend(load_stock_data("data/stocks_old.csv"))
+stocks_test = detrend(load_stock_data("data/stocks_test.csv"))
+logger.info(f"Loaded {stocks_new.shape} stocks (new)")
+logger.info(f"Loaded {stocks_old.shape} stocks (old)")
+logger.info(f"Loaded {stocks_test.shape} stocks (test)")
 
-# full_train_prices = stocks_old
-# full_train_tech = make_ema_tech(full_train_prices, periods=[1, 2, 4, 8, 16])
-# full_train_env = DiffStockTradingEnv(full_train_prices, full_train_tech)
-# full_val_prices = stocks_new
-# full_val_tech = make_ema_tech(full_val_prices, periods=[1, 2, 4, 8, 16])
-# full_val_env = DiffStockTradingEnv(full_val_prices, full_val_tech)
-
-fn = gen_trend
 periods = [1, 2, 4, 8, 16]
-full_train_prices = fn(2000, 3)
+full_train_prices = stocks_old
 full_train_tech = make_ema_tech(full_train_prices, periods=periods)
 full_train_env = DiffStockTradingEnv(full_train_prices, full_train_tech)
-full_val_prices = fn(10**4, 3)
+full_val_prices = stocks_new
 full_val_tech = make_ema_tech(full_val_prices, periods=periods)
 full_val_env = DiffStockTradingEnv(full_val_prices, full_val_tech)
 
+# fn = gen_trend
+# periods = [1, 2, 4, 8, 16]
+# full_train_prices = fn(2000, 3)
+# full_train_tech = make_ema_tech(full_train_prices, periods=periods)
+# full_train_env = DiffStockTradingEnv(full_train_prices, full_train_tech)
+# full_val_prices = fn(10**4, 3)
+# full_val_tech = make_ema_tech(full_val_prices, periods=periods)
+# full_val_env = DiffStockTradingEnv(full_val_prices, full_val_tech)
+
 
 def train_env(**kwargs):
-    train_length = 1000
+    train_length = 500
     l = np.random.randint(0, full_train_env.price_array.shape[0] - train_length)
     r = l + train_length
     return full_train_env.subsegment(l, r)
 
 
 def val_env(**kwargs):
-    val_length = 1000
+    val_length = 500
     l = np.random.randint(0, full_val_env.price_array.shape[0] - val_length)
     r = l + val_length
     return full_val_env.subsegment(l, r)
 
 
 def demo_env(**kwargs):
-    demo_length = 100
+    demo_length = 500
     l = np.random.randint(0, full_val_env.price_array.shape[0] - demo_length)
     r = l + demo_length
     return full_val_env.subsegment(l, r)
 
 
-def train():
-    model = fit_policy_on_pnl(
-        env_factory=train_env,
-        val_env_factory=val_env,
-        val_period=5,
-        n_epochs=1000,
-        batch_size=1,
-        lr=1e-4,
-        dropout_rate=0.0,
-        init_from="checkpoints/policy_supervised_500.pth",
-    )
+USE_PNL = None
+N_LAYERS = 2
+DROPOUT = 0.2
 
-    # model = fit_policy_on_optimal(
-    #     policy=MLPPolicy(
-    #         full_train_env.observation_space.shape,
-    #         full_train_env.action_space.shape[0],
-    #         dropout_rate=0.0,
-    #     ),
-    #     n_epochs=1000,
-    #     batch_size=128,
-    #     lr=1e-4,
-    #     full_train_env=full_train_env,
-    #     full_val_env=full_val_env,
-    #     val_length=1000,
-    # )
+
+def train():
+    if USE_PNL:
+        model = fit_policy_on_pnl(
+            env_factory=train_env,
+            val_env_factory=val_env,
+            val_period=5,
+            n_epochs=1000,
+            batch_size=1,
+            lr=1e-4,
+            n_layers=N_LAYERS,
+            dropout_rate=DROPOUT,
+            # init_from="checkpoints/policy_supervised_500.pth",
+        )
+    else:
+        model = fit_policy_on_optimal(
+            policy=MLPPolicy(
+                full_train_env.observation_space.shape,
+                full_train_env.action_space.shape[0],
+                dropout_rate=DROPOUT,
+                n_layers=N_LAYERS,
+            ),
+            n_epochs=1000,
+            batch_size=128,
+            lr=1e-4,
+            full_train_env=full_train_env,
+            full_val_env=full_val_env,
+            val_length=500,
+        )
 
 
 def demo(it: int, avg: bool, show_optimal: bool = False):
@@ -85,16 +95,16 @@ def demo(it: int, avg: bool, show_optimal: bool = False):
     policy = MLPPolicy(
         env.observation_space.shape,
         env.action_space.shape[0],
-        dropout_rate=0.9,
+        dropout_rate=DROPOUT,
+        n_layers=N_LAYERS,
     )
-    if avg:
-        assert False
+    if USE_PNL:
         policy.load_state_dict(
-            t.load(f"checkpoints/avg_policy_{it}.pth", weights_only=False)
+            t.load(f"checkpoints/policy_pnl_{it}.pth", weights_only=False)
         )
     else:
         policy.load_state_dict(
-            t.load(f"checkpoints/policy_pnl_{it}.pth", weights_only=False)
+            t.load(f"checkpoints/policy_supervised_{it}.pth", weights_only=False)
         )
     policy.eval()
     state, _ = env.reset_state()
@@ -202,11 +212,19 @@ if __name__ == "__main__":
         help="Mode to run: train or demo",
     )
     parser.add_argument(
+        "pnl",
+        choices=["pnl", "opt"],
+        help="Algorithm to use: pnl or opt",
+    )
+    parser.add_argument(
         "--iter", type=int, default=100, help="Number of iterations to load for demo"
     )
     parser.add_argument("--avg", action="store_true", help="Use Polyak-averaged policy")
     args = parser.parse_args()
-
+    if args.pnl == "pnl":
+        USE_PNL = True
+    else:
+        USE_PNL = False
     if args.mode == "train":
         train()
     elif args.mode == "demo":
