@@ -8,9 +8,12 @@ from loguru import logger
 from models import fit_policy_on_optimal, fit_policy_on_pnl, MLPPolicy, rollout
 from tqdm import tqdm
 
-stocks_new = detrend(load_stock_data("data/stocks_new.csv"))
-stocks_old = detrend(load_stock_data("data/stocks_old.csv"))
-stocks_test = detrend(load_stock_data("data/stocks_test.csv"))
+stocks_new = load_stock_data("data/stocks_new.csv")
+stocks_old = load_stock_data("data/stocks_old.csv")
+stocks_test = load_stock_data("data/stocks_test.csv")
+# stocks_new = detrend(stocks_new)
+# stocks_old = detrend(stocks_old)
+# stocks_test = detrend(stocks_test)
 logger.info(f"Loaded {stocks_new.shape} stocks (new)")
 logger.info(f"Loaded {stocks_old.shape} stocks (old)")
 logger.info(f"Loaded {stocks_test.shape} stocks (test)")
@@ -56,7 +59,7 @@ def demo_env(**kwargs):
 
 USE_PNL = None
 N_LAYERS = 2
-DROPOUT = 0.1
+DROPOUT = 0.00
 
 
 def train():
@@ -67,7 +70,7 @@ def train():
             val_period=5,
             n_epochs=1000,
             batch_size=1,
-            lr=1e-3,
+            lr=3e-4,
             n_layers=N_LAYERS,
             dropout_rate=DROPOUT,
             init_from="checkpoints/policy_supervised_500.pth",
