@@ -11,9 +11,9 @@ from tqdm import tqdm
 stocks_new = load_stock_data("data/stocks_new.csv")
 stocks_old = load_stock_data("data/stocks_old.csv")
 stocks_test = load_stock_data("data/stocks_test.csv")
-# stocks_new = detrend(stocks_new)
-# stocks_old = detrend(stocks_old)
-# stocks_test = detrend(stocks_test)
+stocks_new = detrend(stocks_new)
+stocks_old = detrend(stocks_old)
+stocks_test = detrend(stocks_test)
 logger.info(f"Loaded {stocks_new.shape} stocks (new)")
 logger.info(f"Loaded {stocks_old.shape} stocks (old)")
 logger.info(f"Loaded {stocks_test.shape} stocks (test)")
@@ -59,7 +59,7 @@ def demo_env(**kwargs):
 
 USE_PNL = None
 N_LAYERS = 2
-DROPOUT = 0.00
+DROPOUT = 0.01
 
 
 def train():
